@@ -1,0 +1,394 @@
+                    +--------------------------+
+                     |           CS 439         |
+                     | PROJECT 2: USER PROGRAMS |
+                     |      DESIGN DOCUMENT     |
+                     +--------------------------+
+
+
+For this design document, please *each* submit the header, but you do not need
+to fill out the questions.  We will cover all questions (in content, if not in
+form) in the interview.
+
+When you have completed the header, submit it to the Canvas assignment
+Project 2 Design and Documentation.  ***Your submission must be a text file and
+each line must not extend past 80 characters.  (Note that rtf files are NOT text
+files.)
+
+
+---- Name ----
+
+>> Fill your name, UT EID, CS login, email address, and unique number:
+
+Name: Dev Aggarwal
+EID: da34882
+CS login: dev4dev
+Email: dev4dev@cs.utexas.edu
+Unique Number: 54895
+
+Slip days used on this project: 1
+
+
+---- GROUP ----
+
+>> Fill the names, UT EIDs, CS logins, email addresses, and unique numbers
+>> of your group members.  Also fill in each person's ranking on the 
+>> partner evaluation scale, as determined by you.
+
+Name: Dev Aggarwal
+EID: da34882
+CS login: dev4dev
+Email: dev4dev@cs.utexas.edu
+Unique Number: 54895
+
+Name: Hrutvik Rao Palutla Venkata
+EID: hp22429
+CS login: hrutvikp
+Email: hrutvikp@cs.utexas.edu
+Unique Number: 54905
+
+
+---- PRELIMINARIES ----
+
+
+>> If you have any preliminary comments on your submission, notes for the
+>> TAs, or extra credit, please give them here.
+>> N/A
+
+
+>> Please cite any offline or online sources you consulted while
+>> preparing your submission, other than the Pintos documentation, course
+>> text, lecture notes, and course staff.
+>> N/A
+
+
+>> Please paste a link to your GitLab repo below.
+>> https://github.com/DevAggarwal01/pintos 
+
+
+
+                           ARGUMENT PASSING
+                           ================
+
+
+---- DATA STRUCTURES ----
+
+
+>> A1: Copy here the declaration of each new or changed `struct' or
+>> `struct' member, global or static variable, `typedef', â€˜#defineâ€™, or
+>> enumeration that was necessary to implement argument passing.  
+>> Identify the purpose of each in 25 words or less.
+>>
+
+struct start_info {
+    char *fn_copy;              // copy of the file name (command line)
+    struct child_record *rec;   // child record for this process
+    struct thread *parent;      // parent thread pointer
+};
+
+PURPOSE: The start_info struct passes in all necessary info from process_execute to 
+process_start. The only field relevant to argument passing is the filename (stored 
+as fn_copy) which is necessary to enable stack setup.
+
+---- ALGORITHMS ----
+
+
+>> A2: Briefly describe how you implemented argument parsing.  How do
+>> you arrange for the elements of argv[] to be in the right order?
+>> How do you avoid overflowing the stack page?  Is it enough to limit
+>> the size of the incoming commandline?  Why or Why not?
+>>
+
+In setup_stack, we allocate space for a string copy, and then collect arguments by 
+tokenizing with strtok_r. Then we add these arguments to the user stack in reverse order. 
+Afterwards, we align the stack pointer to multiple of 4 bytes and then push NULL, 
+pointers to the arguments, arc, and the fake return address.
+
+We avoid stack overflow by doing all stack setup work in a brand new page and then 
+installing it at the very top of user virtual memory. Limiting input length will not 
+work because when the setup_stack() method copies input data into the stack, it also 
+pushes ‘\0\ terminator, word alignment, and many pointers which take up a significant 
+part of the stack. So if we limit the input size to be PGSIZE at the very largest, 
+the stack construction will not be complete due to these additions.
+
+
+---- RATIONALE ----
+
+
+>> A3: Why does Pintos implement strtok_r() but not strtok()?
+>>
+Strtok is not thread-safe because its data is accessible on a global scale, but strok_r() 
+is thread safe. Since Pintos makes use of multithreading, strtok_r() is implemented.
+
+>> A4: In Pintos, the kernel separates commands into an executable name
+>> and arguments.  In Unix-like systems, the shell does this
+>> separation.  Identify at least two advantages of the Unix approach.
+>>
+This structure is very flexible because any updates that are made in shell syntax will not 
+require kernel code to be updated to address these changes.
+The kernel doesn’t need to know shell syntax like piping or redirection since the shell will 
+handle it. Also, ampersands in the command line may require multiple processes to be created 
+so its much easier / simpler to handle this in the shell.
+
+                             SYSTEM CALLS
+                             ============
+
+
+---- DATA STRUCTURES ----
+
+
+>> B1: Copy here the declaration of each new or changed `struct' or
+>> `struct' member, global or static variable, `typedef', â€˜#defineâ€™, or
+>> enumeration.  Identify the purpose of each in 25 words or less.
+>>
+
+struct lock file_lock;
+
+PURPOSE: To make sure that only 1 thread at a time can access the filesystem to prevent 
+synchronization issues.
+
+struct fd_entry {
+    int fd;                  // file descriptor number
+    struct file *f;          // pointer to the opened file   
+    struct list_elem elem;   // list element for inclusion in a list
+};
+
+PURPOSE: Each thread can keep track of the files it has opened. Files are never given to 
+the users. Instead, only associated integers are given to the users so that file system 
+operations can only be performed by the kernel.
+
+struct child_record {
+    tid_t parent_tid;               // parent thread ID
+    tid_t child_tid;                // child thread ID
+    int exit_code;                  // exit status
+    bool exited;                    // if the child has exited
+    bool waited;                    // if the parent has already waited
+    bool loaded;                    // if the child successfully loaded its executable
+    struct semaphore start_sema;    // child waits until parent finishes setup
+    struct semaphore load_sema;     // parent waits until child finishes loading
+    struct semaphore exit_sema;     // parent waits until child exits
+    struct list_elem elem_child;    // for representing in parent->children list
+};
+
+PURPOSE: Helps each process keep track of any children processes it may have. The child_record 
+struct is also where the semaphores for starting, loading, and exiting are stored.
+
+struct start_info {
+    char *fn_copy;              // copy of the file name (command line)
+    struct child_record *rec;   // child record for this process
+    struct thread *parent;      // parent thread pointer
+};
+
+PURPOSE: start_info is necessary to pass in child_record and parent thread to 
+process_start() from process_execute().
+
+struct thread {
+    /* Owned by thread.c. */
+    tid_t tid;                 /* Thread identifier. */
+    enum thread_status status; /* Thread state. */
+    char name[16];             /* Name (for debugging purposes). */
+    uint8_t *stack;            /* Saved stack pointer. */
+    int priority;              /* Priority. */
+    int original_priority;     /* Original priority before any donations. */
+    struct list_elem allelem;  /* List element for all threads list. */
+
+    /* Shared between thread.c and synch.c. */
+    struct list_elem elem;     /* List element. */
+    struct lock* waiting;      /* Lock that thread is waiting on. */
+    struct list locks;         /* List of locks held by thread. */
+
+    // for user programs
+    int exit_code;                          // exit code of the thread
+    struct child_record *child_record;      // record of this thread in parent's child list
+    struct list children;                   // list for this thread's children
+    struct thread *parent;                  // pointer to parent thread
+
+    struct list fds;                        // list of file descriptor entries
+    int next_fd;                            // next available file descriptor number
+    struct file *exec_file;                 // deny writes to executable files
+
+#ifdef USERPROG
+  /* Owned by userprog/process.c. */
+  uint32_t *pagedir; /* Page directory. */
+#endif
+
+    /* Owned by thread.c. */
+    unsigned magic; /* Detects stack overflow. */
+};
+
+PURPOSE: Holds information such as child_processes, file descriptors, etc. that is 
+critical to the success of system calls.
+
+>> B2: Describe how file descriptors are associated with open files.
+>> Are file descriptors unique within the entire OS or just within a
+>> single process?
+>>
+
+fd_entry is created every time a file is opened in a process. Therefore, file descriptors 
+are only unique within a single process. Although multiple processes may have the same file 
+descriptor integer such as 2 (first number to be handed),the same integer may be associated 
+with different files.
+
+---- ALGORITHMS ----
+
+
+>> B3: Describe your code for accessing user data in the
+>> kernel.
+>>
+
+Any time we copy data from the user, the address is first validated to make sure it is within 
+user memory bounds. Then, a method called copy_data reads the data one byte at a time and 
+validates it before copying the byte into the buffer. In the case of a char pointer, there is 
+also a copy_string() that goes to the pointer and copies strings into the buffer until it 
+reaches a null terminator. The copy_string() method also validates and copies one byte at a time. 
+
+>> B4: Suppose a system call causes a full page (4,096 bytes) of data
+>> to be copied from user space into the kernel.  Based on your code, 
+>> what is the least and the greatest possible number of inspections of 
+>> the page table (e.g. calls to pagedir_get_page()) that might result?  
+>> What about for a system call that only copies 2 bytes of data?  Is there 
+>> room for improvement in these numbers, and how much?
+>>
+If 4096 bytes of data are copied from the user space into the kernel, then there will 
+certainly be 4096 inspections since each byte is validated with a call to addr_to_page() 
+before the data is copied into a buffer.
+
+A system call that only copies 2 bytes of data will result in 2 inspections because as 
+previously stated, each byte must be validated before it can be copied into the buffer.
+
+
+>> B5: Any access to user program memory at a user-specified address
+>> can fail due to a bad pointer value.  Such accesses must cause the
+>> process to be terminated.  System calls are fraught with such
+>> accesses, e.g. a "write" system call requires reading the system
+>> call number from the user stack, then each of the call's three
+>> arguments, then an arbitrary amount of user memory, and any of
+>> these can fail at any point.  This poses a design and
+>> error-handling problem: how do you best avoid obscuring the primary
+>> function of code in a morass of error-handling?  Furthermore, when
+>> an error is detected, how do you ensure that all temporarily
+>> allocated resources (locks, buffers, etc.) are freed?  In a few
+>> sentences, describe the strategy or strategies you adopted for
+>> managing these issues.  Give an example.
+>>
+
+All memory is retrieved only via copy_data() or copy_string(), both of which validate before 
+copying one byte at a time. In the event of an invalid pointer or read failure, all 
+temporarily allocated resources are freed before exiting with the status code -1.
+
+---- SYNCHRONIZATION ----
+
+
+>> B6: Briefly describe your implementation of the "wait" system call
+>> and how it interacts with process termination.
+>>
+
+The process_wait() finds the child record from the parent’s children list. If it is missing 
+or if the child is already waiting, then it returns -1 since this is an error. Otherwise, it 
+waits by using a semaphore to wait until the process exits and returns the status from the 
+exit (so the parent can see the status code). Meanwhile, on the process termination side 
+process_exit() copies exit_code into the child record and signals the exit semaphore so 
+process_wait() can continue.
+
+>> B7: Consider parent process P with child process C.  Explain how
+>> how your code ensures synchronization and avoids race conditions
+>> in each of the following cases:
+>> a) when P calls wait(C) before C exits?  
+>> b) when P calls wait(C) after C exits?  
+>> c) when P terminates without waiting before C exits?  
+>> d) when P terminates without waiting after C exits?  
+>> e) Are there any special cases?
+>> 
+a) In this case, the parent checks the child’s exited flag in its child_record. Since the 
+child hasn’t exited yet, the parent blocks on the semaphore associated with that record. 
+When C eventually calls exit, it sets its exit status, marks exited = true, and signals 
+the semaphore. This wakes up the parent, which can then safely read the exit status.
+
+b) Here, the exited flag in the child’s record is already true. The parent immediately 
+reads the exit status without blocking on the semaphore. Since the child has already cleaned 
+up and stored its exit status, there is no risk of a race condition.
+
+c) If the parent exits without calling wait, the child still uses its child_record to store 
+its exit status. All necessary information is preserved and that memory associated with the 
+child is cleaned up after it finishes, so no problems with synchronization here.
+
+d) Here, the child has already exited and stored its status. Since there is no parent to 
+signal or retrieve the exit information, the child cleans up its own record and any associated 
+resources. This prevents leaks and avoids race conditions, as no other process is 
+concurrently trying to access the child’s exit information.
+
+e) After a bit of wracking our brains around, one special case we could think of is when a 
+parent tries to wait twice on the same child. To handle this, the child_record contains a 
+waited flag to ensure that the exit status can only be consumed once.
+
+
+>> B8: The "exec" system call returns -1 if loading the new executable
+>> fails, so it cannot return before the new executable has completed
+>> loading.  How does your code ensure this?  How is the load
+>> success/failure status passed back to the thread that calls "exec"?
+>> 
+
+In our implementation, exec makes sure that the parent thread does not return until the 
+child process attempts to load the executable by using semaphores in the child_record. When 
+process_execute is called, it creates a child thread and a child_record to track the child’s 
+status. The parent signals the child to start using start_sema, and then waits for the child 
+to finish loading by calling sema_down on load_sema. In the child thread (start_process), 
+after attempting to load the executable with load(), it sets the loaded flag in the 
+child_record and signals the parent with sema_up on load_sema. The parent then reads the loaded
+flag to determine whether loading succeeded or failed. If the load failed, process_execute 
+cleans up and returns TID_ERROR (which exec translates to -1).
+
+---- RATIONALE ----
+
+
+>> B9: What advantages or disadvantages can you see to your design
+>> for file descriptors?
+>> 
+Our design for file descriptors uses a per-thread list of fd_entry structures, each holding the 
+file pointer and an assigned descriptor number.The biggest advantage for us here is simplicity: 
+it is easy to allocate, find, and remove file descriptors for a specific thread, and next_fd 
+ensures unique descriptors within a thread without needing something global. It also allows 
+locking at the file level. One disadvantage is that searching for a file descriptor requires 
+traversing the linked list, which is O(n) in the number of open files. Additionally, because 
+the descriptors are per-thread, sharing files across threads requires extra logic or passing 
+descriptors manually.
+
+>> B10: The default tid_t to pid_t mapping is the identity mapping.
+>> If you changed it, what advantages are there to your approach?
+>> In our implementation, we kept the default mapping where pid_t and tid_t are the same; this 
+made things simpler for us to work with, because there’s no translation required.
+
+
+                           SURVEY QUESTIONS
+                           ================
+
+
+Answering these questions is optional, but it will help us improve the
+course in future semesters.  Feel free to tell us anything you
+want--these questions are just to spur your thoughts.  You may also
+choose to respond anonymously in the course evaluations at the end of
+the semester.
+
+
+>> In your opinion, was this assignment, or any one of the three problems
+>> in it, too easy or too hard?  Did it take too long or too little time?
+>>
+
+
+>> Did you find that working on a particular part of the assignment gave
+>> you greater insight into some aspect of OS design?
+>>
+
+
+>> Is there some particular fact or hint we should give students in
+>> future semesters to help them solve the problems?  Conversely, did you
+>> find any of our guidance to be misleading?
+>>
+
+
+>> Do you have any suggestions for the TAs to more effectively assist
+>> students, either for future semesters or the remaining projects?
+>>
+
+
+>> Any other comments?
+>>

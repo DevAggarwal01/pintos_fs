@@ -1,0 +1,22 @@
+Teammates: Dev Aggarwal, Hrutvik Rao Palutla Venkata
+
+I (Dev) will give a general overview of our workflow and division of effort.
+
+We both spent a lot of time on this project together—mostly pair programming or over 
+late-night calls debugging the more complex system call and process synchronization logic.
+
+Hrutvik focused heavily on the argument passing and synchronization issues. Meanwhile, 
+I focused on system calls. We worked together to design the process synchronization logic. 
+I helped design and test the child_record structure and wrote much of the parent–child 
+synchronization and exit handling code. I also worked on the file descriptor table logic 
+(fd_entry creation, lookup, and cleanup). Hrutvik implemented all file locking, and 
+most of the semaphore logic. He also heavily worked on setting up the stack and a lot of the
+logic in load in process.c, which we had to make a variety of modifications to. I also
+personally working on implementing file access control (denying writes, stuff like that).
+
+Once our system calls were passing most tests, Hrutvik fixed a lot of our failing test cases, 
+while I cleaned up the code, organized the structs, and wrote detailed comments and parts of 
+the design document. We both reviewed each other’s sections and did final testing together.
+
+Total Hours Spent: ~14–15 hours each
+

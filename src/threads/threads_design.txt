@@ -1,0 +1,358 @@
+                        +--------------------+
+                        |        CS 439      |
+                        | PROJECT 1: THREADS |
+                        |   DESIGN DOCUMENT  |
+                        +--------------------+
+
+
+The questions in this design document should reflect the design of the code you
+wrote for the project.  Your grade will reflect both the quality of your answer
+in this document and the quality of the design implementation in your code.  You
+may receive partial credit for answering questions for parts of the project that
+you did not get to implement, but you must indicate in your answer that there is
+no corresponding implementation, or you will not receive any credit.
+
+For each question, you should include both the name of the file(s), function 
+name(s), and the line numbers where the relevant code may be found---both the 
+code that answers the question directly and any function that you refer to in 
+your answer.
+
+These design documents will be completed and submitted as a group.  Please use 
+this document as a guide for design and discuss the questions and their 
+potential answers prior to beginning implementation.
+
+When you have completed your design document, submit it to the Canvas 
+assignment Project 1 Design and Documentation.   
+
+***Your submission must be a text file and each line must not extend past 80 
+characters.  In addition, your submission must contain all of the original 
+material and not exceed 15,500 characters.  The character count will be 
+measured using the Linux command wc.  (Note that rtf files are NOT text files.)
+
+---- Team Information  ----
+
+>> Fill your names, UT EIDs, CS logins, email addresses, and unique numbers:
+
+Name: Dev Aggarwal
+EID: da34882
+CS login: dev4dev
+Email: dev4dev@cs.utexas.edu
+Unique Number: 54895
+
+Name: Hrutvik Rao Palutla Venkata
+EID: hp22429
+CS login: hrutvikp
+Email: hrutvikp@cs.utexas.edu
+Unique Number: 54905
+
+
+Slip days used on this project: 1
+
+
+
+
+---- PRELIMINARIES ----
+
+>> If you have any preliminary comments on your submission or notes for the
+>> TAs,  please give them here.
+
+    We've changed the thread struct to help us with our implementation. Other 
+    than that, we've changed very little of the provided code outside of the
+    methods that required change and any code we wrote ourselves.
+
+
+>> Please cite any offline or online sources you consulted while
+>> preparing your submission, other than the Pintos documentation, course
+>> text, lecture notes, and course staff.
+
+
+    Most of our understanding of threads as used in this assignment only comes 
+    from the lectures, slides, and the documentation of this project.
+
+
+>> Please paste a link to your GitLab repo below.
+>> https://github.com/DevAggarwal01/pintos#
+
+
+
+                             ALARM CLOCK
+                             ===========
+
+
+---- DATA STRUCTURES ----
+
+
+>> A1: Copy here the declaration of each new or changed `struct' or
+>> `struct' member, global or static variable, `typedef', â€˜#defineâ€™, or
+>> enumeration that was necessary for your implementation of alarm
+>> clock.  Identify the purpose of each in 25 words or less.
+
+    struct sleeping_thread_struct {
+        int64_t wakeup_time;
+        struct list_elem elem;
+        struct semaphore sema;
+    };
+
+    PURPOSE: Holds a sleeping thread's wakeup time, a list element for the
+    sleep_list struct, and a per-thread semaphore used to block and wake the thread.
+
+    static struct list sleep_list;
+
+    PURPOSE: Global ordered list of sleeping_thread_struct nodes.  The
+    front element is the thread with the earliest wakeup time.
+
+
+---- ALGORITHMS ----
+
+
+>> A2: Briefly describe what happens when a thread calls timer_sleep(),
+>> including the steps necessary to wake a thread (hint: timer_interrupt).
+
+    When a thread calls timer_sleep(ticks), it gets the current tick count since
+    OS bootup via timer_ticks() on line 116 and and computes the wakeup time 
+    (current tick count and the time passed in to the call) on line 120.  
+    It then creates a sleeping_thread_struct, initializes its semaphore to 0, 
+    then disables interrupts briefly and inserts the node into the global sleep_list in
+    sorted order on line 125.  After restoring interrupts the thread calls sema_down
+    and blocks. timer_interrupt increments the global tick count, examines the front of
+    sleep_list, and while the head has wakeup_time <= ticks it pops the node and calls 
+    sema_up to wake the sleeping thread (inside the while loop on lines 182-192).
+
+>> A3: What steps are taken to minimize the amount of time spent in
+>> the timer interrupt handler?  
+
+    The interrupt handler is pretty small. The heavy work, which deals with the 
+    ordering by wake time of the sleeping threads, is done when a thread goes to sleep
+    in timer_sleep. Because the list is ordered, the interrupt handler needs only to 
+    check the front element(s) and stop at the first future wakeup. The handler only
+    increments ticks, tests the first sleeping thread's wakeup times, pops it, and then
+    wakes it up if needed. There is no scanning of the whole list, no allocation, and no 
+    complicated computation occurs that occurs inside the interrupt handler.
+
+---- SYNCHRONIZATION ----
+
+
+>> A4: How are race conditions avoided when multiple threads call
+>> timer_sleep() simultaneously?  Describe the race conditions.
+
+    Race conditions when there are multiple simultaneous timer_sleep calls are avoided 
+    by making the list insertion (into the list of sleeping threads) atomic w.r.t. the 
+    timer interrupt on this CPU. Each caller initializes its node's semaphore before 
+    inserting (line 121) and disables interrupts while modifying sleep_list (lines 123-127).
+    On a uniprocessor Pintos build, disabling interrupts prevents the timer interrupt handler
+    from running while the caller inserts, so there is no list corruption. The compare_wakeup_time
+    nethod guarantees correct ordering when multiple insertions occur concurrently. 
+
+    Some of the race conditions in this case are:
+    - Two threads insert concurrently, corrupting the doubly-linked list (pointers inconsistent).
+    - A thread begins insertion while the timer interrupt also tries to read or pop the list head,
+    producing a read of partially-updated pointers or an invalid head.
+    
+    Because each sleeping node is fully initialized before insertion and this insertion is performed
+    with interrupts disabled on the CPU doing the insert (making the modification atomic and avoiding
+    concurrent read/modify by the handler), this implementation is safe.
+
+>> A5: How are race conditions avoided when a timer interrupt occurs
+>> during a call to timer_sleep()?  Describe the race conditions.
+>>
+
+    There are two important race conditions if the timer interrupt fires during timer_sleep:
+    - The interrupt runs before the node is inserted in timer_sleep, so the handler does not
+    see the node and would not wake it until a later tick. This is harmless because the node
+    will still be inserted nd woken up at its proper time.
+    - The interrupt runs after insertion but before the thread calls sema_down, so the handler
+    does sema_up and the wake could be lost if semaphores were not used correctly.
+
+    Just like it was noted in A4, the node's semaphore is initialized before the node becomes
+    visible; therefore, if the handler calls sema_up before sema_down, the semaphore's value is 
+    incremented and the subsequent sema_down will return immediately. Also, (again a point from
+    A4) insertion is done with interrupts disabled (lines 123-127), so the handler cannot run in
+    the middle of the insertion and observe a partially-formed node. Together, the ordering of
+    initiazing the semaphore, to an atomic insert, to sema_down guarantees correctness.
+
+---- RATIONALE ----
+
+
+>> A6: Why did you choose this design?  In what ways is it superior to
+>> another design you considered?  Be certain to compare between two
+>> working designs.
+>>
+
+    I chose the per-thread struct plus ordered-list design because it moves work out of the
+    interrupt handler and keeps the interrupt path minimal. By ordering at timer_sleep time
+    (line 125), timer_interrupt only checks the head(s) on each tick and can stop quickly. 
+    Compared to a simple unsorted list scanned every tick, this design drastically reduces
+    work at interrupt time at the cost of slightly more work during sleep calls. Busy
+    waiting (the original implementation) is another simpler option but wastes CPU time and
+    harms scheduler fairness. Our approach is efficient, safe, and easy to reason about.
+
+
+                         PRIORITY SCHEDULING
+                         ===================
+
+
+---- DATA STRUCTURES ----
+
+
+>> B1: Copy here the declaration of each new or changed `struct' or
+>> `struct' member, global or static variable, `typedef', â€˜#defineâ€™, or
+>> enumeration that was necessary for your implementation of priority
+>> scheduling and priority donation.  
+>> Identify the purpose of each in 25 words or less.
+
+    struct thread {
+        tid_t tid;                 
+        enum thread_status status;
+        char name[16];
+        uint8_t *stack;
+        int priority;
+        int original_priority; // THIS IS NEW
+        struct list_elem allelem;
+        struct list_elem elem;
+        struct lock* waiting; // THIS IS NEW
+        struct list locks; // THIS IS NEW
+        #ifdef USERPROG
+            uint32_t *pagedir;
+        #endif
+        unsigned magic;
+    };
+
+    PURPOSE: To make dealing with priority scheduling and priority donation
+    easier to work with in lot of ways (described below).
+
+
+---- ALGORITHMS ----
+
+
+>> B2: How do you ensure that the highest priority thread waiting for
+>> a lock, semaphore, or condition variable wakes up first?  
+>> Explain for all three.
+>>
+
+    For semaphores: the implementation keeps a waiters list ordered by
+    priority and always unblocks the front (highest-priority) waiter. 
+    See sema_down/sema_up in synch.c: waiters are inserted with
+    list_insert_ordered and sema_up= picks the front waiter to unblock. 
+    
+    For locks: lock_acquire uses the lock's semaphore, so the same 
+    ordered-waiter behavior in semaphores guarantees the highest priority waiter
+    acquires the lock next (in synch.c). 
+    
+    For condition variables: we use a semaphore_elem per waiter and maintain 
+    cond->waiters ordered by the highest priority waiting thread (see the 
+    cond_sema_more method and cond_signal method in synch.c); the cond_signal
+    method wakes the semaphore whose waiter has the highest priority.
+
+
+>> B3: Describe the sequence of events when a call to lock_acquire()
+>> causes a priority donation.  How is nested donation handled?
+>>
+
+    When a higher-priority thread H attempts lock_acquire(L) and sets
+    L->holder == M (a lower-priority thread), the current thread sets
+    itself as waiting (a field) on L and calls donate_priority(H, M, L). This
+    donation routine raises M->priority to H->priority if needed and
+    reorders lists so the thread can run sooner. If M itself is blocked and is
+    waiting on another lock, the donation loop follows M->waiting to this lock's
+    holder and propagates the donation further. This chain-traversal helps
+    implements nested donation; the highest waiting priority flows along
+    the chain of locks to every holder on the path until no receiver has a
+    lower priority than the donor (thus successfully donating priority).
+
+
+>> B4: Describe the sequence of events when lock_release() is called
+>> on a lock on which a higher-priority thread is waiting.  What happens to
+>> the priority of the thread releasing the lock?
+>>
+
+    On lock_release, the holder removes lock from its locks list (which is an
+    added field) and clears lock->holder. The releasing thread then calls 
+    compute_priority to recompute its effective priority from original_priority
+    and any remaining donations arising from threads waiting on locks it still
+    holds. Semaphore waiters are kept in priority order, so sema_up always wakes
+    the thread at the front of the list, which is the highest‑priority waiter.
+    Thus the releaser's priority drops (if appropriate) back toward its original
+    value or to the highest donation from other locks it continues to hold.
+
+
+---- SYNCHRONIZATION ----
+
+
+>> B5: Describe a potential race in thread_set_priority() and explain
+>> how your implementation avoids it.  Can you use a lock to avoid
+>> this race?  Defend your answer.
+>>
+
+    A race can occur if a thread changes its base priority while other
+    threads are concurrently donating to it or while the thread holds
+    locks whose waiters are being inspected. To avoid races we perform
+    priority updates and recomputation with interrupts disabled in
+    thread_set_priority and in compute_priority (see thread.c and synch.c
+    respectively). Disabling interrupts makes the update atomic considering
+    the timer and other interrupt-driven code that might examine or modify
+    scheduling lists. A lock is not appropriate here because priority changes
+    are internal to the scheduler and acquiring locks while changing scheduling
+    state can hurt donation; disabling interrupts is the safer approach.
+
+---- RATIONALE ----
+
+
+>> B6: Why did you choose this design for your priority scheduling and
+>> donation?  In what ways is it superior to another design you considered?
+>> Please make certain you discuss both priority scheduling and donation, and
+>> be certain to compare against working designs.
+
+    We chose to use ordered waiter lists with explicit donation because waiters
+    are kept sorted so the highest-priority waiter runs next, and when a high-priority
+    thread blocks on a lock we propagate its priority along the chain of holders 
+    (helpers in synch.c do this) and restore the original priority on release. This
+    means that wakeups stay fast.  Compared with doing nothing (which is simple but
+    allows higher-priority threads to sometimes strave) or with using a single global
+    scheduler lock (which would avoid races but hurt concurrency), this design gives a
+    good balance. Ordered wait-lists ensure notify/unblock work is cheap.
+
+
+
+
+                           SURVEY QUESTIONS
+                           ================
+
+
+Answering these questions is optional, but it will help us improve the
+course in future semesters.  Feel free to tell us anything you
+want--these questions are just to spur your thoughts.  You may also
+choose to respond anonymously in the course evaluations at the end of
+the semester.
+
+
+>> In your opinion, was this assignment, or any one of the two problems
+>> in it, too easy or too hard?  Did it take too long or too little time?
+
+    It was fair. It wasn't too hard, but it wasn't a piece of cake either. We think
+    we spent a good amount of time on this assignment, but it was not extremely stressful.
+
+
+>> Did you find that working on a particular part of the assignment gave
+>> you greater insight into some aspect of OS design?
+
+    We think this assignment as a whole was great to cement our understanding of threads.
+
+
+>> Is there some particular fact or hint we should give students in
+>> future semesters to help them solve the problems?  Conversely, did you
+>> find any of our guidance to be misleading?
+
+    We think there were hardly any instructions in the project pages, but this could be 
+    improved in future semesters to have, perhaps, a high-level set of questions to get 
+    us thinking about the different parts of this project.
+
+
+>> Do you have any suggestions for the TAs to more effectively assist
+>> students, either for future semesters or the remaining projects?
+
+    We did not really go to OH or use Ed for this assignment, so no comment.
+
+
+>> Any other comments?
+
+    Glad we're done! Wasn't as hard as we thought it would be.
