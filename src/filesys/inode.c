@@ -284,7 +284,6 @@ static bool deallocate_all_blocks(struct inode_disk *d) {
 
   }
   d->length = 0;
-  block_write(fs_device, d->sector, d);
   return true;
 }
 

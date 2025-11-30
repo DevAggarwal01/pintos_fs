@@ -33,6 +33,76 @@ void filesys_init (bool format)
    to disk. */
 void filesys_done (void) { free_map_close (); }
 
+static struct dir *get_parent_directory(const char *path, char leaf[NAME_MAX + 1]) {
+  if(path == NULL || path[0] == '\0') {
+      return NULL;
+  }
+  struct dir *current_dir;
+  // if first char is '/', start from root because it is absolute path
+  if (path[0] == '/') {
+      current_dir = dir_open_root();
+  } else { // relative path
+      // TODO save directories in thread.working_directory and then access from there
+      current_dir = dir_open_root();
+  }
+
+  if(current_dir == NULL) {
+      return NULL;
+  }
+
+  // strtok_r modifies the input string, so we make a copy
+  size_t len = strlen (path);
+  char *path_copy = malloc(len + 1);
+  if (path_copy == NULL) {
+      dir_close(current_dir);
+      return NULL;
+  }
+  strlcpy(path_copy, path, len + 1);
+
+  char *save_ptr;
+  char *token = strtok_r(path_copy, "/", &save_ptr);
+  
+  // path is just "/"
+  if(token == NULL) {
+      free(path_copy);
+      leaf[0] = '\0';
+      return current_dir;
+  }
+
+  while (token != NULL) {
+    char *next_token = strtok_r(NULL, "/", &save_ptr);
+
+    // this is the last file in the path
+    if (next_token == NULL) {
+        strlcpy(leaf, token, NAME_MAX + 1);
+        free(path_copy);
+        return current_dir;
+    } else { // go to next directory
+        struct inode *inode;
+        if (!dir_lookup(current_dir, token, &inode)) {
+            dir_close(current_dir);
+            free(path_copy);
+            return NULL;
+        }
+        struct dir *next_dir = dir_open(inode);
+        dir_close(current_dir);
+        if (next_dir == NULL) {
+          inode_close(inode);
+          free(path_copy);
+          return NULL;
+        }
+        
+        current_dir = next_dir;
+    }
+    token = next_token;
+  }
+
+  // shouldn't reach here if path is valid
+  free(path_copy);
+  dir_close(current_dir);
+  return NULL;
+}
+
 /* Creates a file named NAME with the given INITIAL_SIZE.
    Returns true if successful, false otherwise.
    Fails if a file named NAME already exists,
@@ -40,12 +110,26 @@ void filesys_done (void) { free_map_close (); }
 bool filesys_create (const char *name, off_t initial_size)
 {
   block_sector_t inode_sector = 0;
-  struct dir *dir = dir_open_root ();
+  char filename[NAME_MAX + 1];
+  
+  struct dir *dir = get_parent_directory(name, filename);
+  
+  if (dir == NULL) {
+      return false;
+  }
+  // don't allow the "." and ".." filenames to be created
+  if(filename[0] == '\0' || strcmp(filename, ".") == 0 || strcmp(filename, "..") == 0) {
+      dir_close(dir);
+      return false;
+  }
+
   bool success = (dir != NULL && free_map_allocate (1, &inode_sector) &&
                   inode_create (inode_sector, initial_size) &&
-                  dir_add (dir, name, inode_sector));
+                  dir_add (dir, filename, inode_sector));
+
   if (!success && inode_sector != 0)
     free_map_release (inode_sector, 1);
+
   dir_close (dir);
 
   return success;
@@ -58,13 +142,29 @@ bool filesys_create (const char *name, off_t initial_size)
    or if an internal memory allocation fails. */
 struct file *filesys_open (const char *name)
 {
-  struct dir *dir = dir_open_root ();
+  if (name == NULL || name[0] == '\0') {
+      return NULL;
+  }
+
+  if(strcmp(name, "/") == 0) {
+      struct inode *root_inode = inode_open (ROOT_DIR_SECTOR);
+      return file_open(root_inode);
+  }
+
+  char filename[NAME_MAX + 1];
+  struct dir *parent_dir = get_parent_directory(name, filename);
+  if (parent_dir == NULL) {
+      return NULL;
+  }
+
   struct inode *inode = NULL;
 
-  if (dir != NULL)
-    dir_lookup (dir, name, &inode);
-  dir_close (dir);
+  if(!dir_lookup (parent_dir, filename, &inode)) {
+    // file_open can handle a null inode
+    inode = NULL;
+  }
 
+  dir_close (parent_dir);
   return file_open (inode);
 }
 
@@ -74,9 +174,23 @@ struct file *filesys_open (const char *name)
    or if an internal memory allocation fails. */
 bool filesys_remove (const char *name)
 {
-  struct dir *dir = dir_open_root ();
-  bool success = dir != NULL && dir_remove (dir, name);
-  dir_close (dir);
+  if(name == NULL || name[0] == '\0') {
+      return false;
+  }
+  char filename[NAME_MAX + 1];
+  struct dir *parent_dir = get_parent_directory(name, filename);
+  if (parent_dir == NULL) {
+      return false;
+  }
+
+  // don't allow the "." and ".." filenames to be removed
+  if(filename[0] == '\0' || strcmp(filename, ".") == 0 || strcmp(filename, "..") == 0) {
+      dir_close(parent_dir);
+      return false;
+  }
+
+  bool success = parent_dir != NULL && dir_remove (parent_dir, filename);
+  dir_close (parent_dir);
 
   return success;
 }
@@ -86,7 +200,7 @@ static void do_format (void)
 {
   printf ("Formatting file system...");
   free_map_create ();
-  if (!dir_create (ROOT_DIR_SECTOR, 16))
+  if (!dir_create (ROOT_DIR_SECTOR, 16, ROOT_DIR_SECTOR))
     PANIC ("root directory creation failed");
   free_map_close ();
   printf ("done.\n");
