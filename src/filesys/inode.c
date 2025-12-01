@@ -13,8 +13,11 @@
 // number of pointers to direct blocks in 1 indirect block
 #define INDIRECT_BLOCK_ENTRIES (BLOCK_SECTOR_SIZE / sizeof (block_sector_t))
 
+#define DIRECT_BLOCKS 123
+
 // number of sectors maximum a file can have
-#define MAX_ENTRIES (124 + INDIRECT_BLOCK_ENTRIES + INDIRECT_BLOCK_ENTRIES * INDIRECT_BLOCK_ENTRIES)
+#define MAX_ENTRIES (DIRECT_BLOCKS + INDIRECT_BLOCK_ENTRIES + INDIRECT_BLOCK_ENTRIES * INDIRECT_BLOCK_ENTRIES)
+
 
 // used as a buffer to initialize indirect blocks with zeros
 static block_sector_t empty_block[INDIRECT_BLOCK_ENTRIES];
@@ -23,12 +26,13 @@ static block_sector_t empty_block[INDIRECT_BLOCK_ENTRIES];
    Must be exactly BLOCK_SECTOR_SIZE bytes long. */
 struct inode_disk
 {
-  // block_sector_t start; /* First data sector. */
+  uint32_t is_directory;  /* 0 is file, 1 is directory */
   off_t length;         /* File size in bytes. */
   unsigned magic;       /* Magic number. */
 
   // THE FOLLOWING BLOCKS MUST TOTAL 508 BYTES = 126 blocks OF 4 BYTES EACH
-  uint32_t direct[124];       /* Direct blocks */
+
+  uint32_t direct[DIRECT_BLOCKS];       /* Direct blocks */
   block_sector_t indirect;    /* Indirect block */
   block_sector_t double_indirect; /* Double indirect block */
 };
@@ -51,6 +55,10 @@ struct inode
   struct inode_disk data; /* Inode content. */
 };
 
+bool inode_is_directory (const struct inode *inode) {
+  return inode->data.is_directory != 0;
+}
+
 /**
  * converts a data block index (0-based) into a block sector_t
  */
@@ -62,13 +70,13 @@ static bool block_index_to_sector (struct inode_disk *d, size_t index, block_sec
   }
 
   // direct blocks
-  if(index < 124) {
+  if(index < DIRECT_BLOCKS) {
     *sector = d->direct[index];
     return true;
   }
 
   // 1st level indirect block
-  if(index < 124 + INDIRECT_BLOCK_ENTRIES) {
+  if(index < DIRECT_BLOCKS + INDIRECT_BLOCK_ENTRIES) {
     if (d->indirect == 0) {
       return false;
     }
@@ -76,10 +84,10 @@ static bool block_index_to_sector (struct inode_disk *d, size_t index, block_sec
     block_sector_t indirect_block[INDIRECT_BLOCK_ENTRIES];
     block_read (fs_device, d->indirect, &indirect_block);
     // check if sector is allocated
-    if(indirect_block[index - 124] == 0) {
+    if(indirect_block[index - DIRECT_BLOCKS] == 0) {
       return false;
     }
-    *sector = indirect_block[index - 124];
+    *sector = indirect_block[index - DIRECT_BLOCKS];
     return true;
   }
 
@@ -88,7 +96,7 @@ static bool block_index_to_sector (struct inode_disk *d, size_t index, block_sec
     return false;
   }
   // calculating indices
-  size_t double_index = index - 124 - INDIRECT_BLOCK_ENTRIES;
+  size_t double_index = index - DIRECT_BLOCKS - INDIRECT_BLOCK_ENTRIES;
   size_t level_one_index = double_index / INDIRECT_BLOCK_ENTRIES;
   size_t level_two_index = double_index % INDIRECT_BLOCK_ENTRIES;
 
@@ -120,7 +128,7 @@ static bool allocate_sector(struct inode_disk *d, size_t index, block_sector_t *
   }
 
   // direct blocks
-  if(index < 124) {
+  if(index < DIRECT_BLOCKS) {
     // direct block not allocated
     if (d->direct[index] == 0) {
       // allocate the block
@@ -135,7 +143,7 @@ static bool allocate_sector(struct inode_disk *d, size_t index, block_sector_t *
   }
 
   // 1st level indirect block
-  if(index < 124 + INDIRECT_BLOCK_ENTRIES) {
+  if(index < DIRECT_BLOCKS + INDIRECT_BLOCK_ENTRIES) {
     // indirect block not allocated
     if (d->indirect == 0) {
       if (!free_map_allocate(1, &d->indirect)) {
@@ -150,16 +158,16 @@ static bool allocate_sector(struct inode_disk *d, size_t index, block_sector_t *
     block_read (fs_device, d->indirect, &indirect_block);
 
     // sector in indirect block not allocated
-    if (indirect_block[index - 124] == 0) {
+    if (indirect_block[index - DIRECT_BLOCKS] == 0) {
       // allocate data block if sector not allocated
-      if (!free_map_allocate(1, &indirect_block[index - 124])) {
+      if (!free_map_allocate(1, &indirect_block[index - DIRECT_BLOCKS])) {
         return false;
       }
 
       // update indirect block
       block_write(fs_device, d->indirect, &indirect_block);
     }
-    *write_to_sector = indirect_block[index - 124];
+    *write_to_sector = indirect_block[index - DIRECT_BLOCKS];
     return true;
   }
 
@@ -175,7 +183,7 @@ static bool allocate_sector(struct inode_disk *d, size_t index, block_sector_t *
   }
 
   // calculating indices
-  size_t double_index = index - 124 - INDIRECT_BLOCK_ENTRIES;
+  size_t double_index = index - DIRECT_BLOCKS - INDIRECT_BLOCK_ENTRIES;
   size_t level_one_index = double_index / INDIRECT_BLOCK_ENTRIES;
   size_t level_two_index = double_index % INDIRECT_BLOCK_ENTRIES;
 
@@ -226,7 +234,7 @@ static bool deallocate_all_blocks(struct inode_disk *d) {
   size_t total_sectors = bytes_to_sectors(d->length);
 
   // deallocate direct blocks
-  for (int i = 0; i < 124 && total_sectors > 0; i++) {
+  for (int i = 0; i < DIRECT_BLOCKS && total_sectors > 0; i++) {
     if (d->direct[i] != 0) {
       free_map_release(d->direct[i], 1);
       d->direct[i] = 0;
@@ -317,7 +325,7 @@ void inode_init (void) { list_init (&open_inodes); }
    device.
    Returns true if successful.
    Returns false if memory or disk allocation fails. */
-bool inode_create (block_sector_t sector, off_t length)
+bool inode_create (block_sector_t sector, off_t length, bool is_directory)
 {
   struct inode_disk *disk_inode = NULL;
   bool success = false;
@@ -334,16 +342,17 @@ bool inode_create (block_sector_t sector, off_t length)
       size_t sectors = bytes_to_sectors (length);
       disk_inode->length = length;
       disk_inode->magic = INODE_MAGIC;
+      disk_inode->is_directory = is_directory; // true = 1
       if( allocate_sectors(disk_inode, sectors)) {
         // zero all the data blocks to remove garbage values
         for (int i = 0; i < sectors; i++) {
-          block_sector_t sector;
-          if (!block_index_to_sector(disk_inode, i, &sector)) {
+          block_sector_t data_sector;
+          if (!block_index_to_sector(disk_inode, i, &data_sector)) {
             free(disk_inode);
             return false;
           }
           // update block to zeros
-          block_write (fs_device, sector, empty_block);
+          block_write (fs_device, data_sector, empty_block);
         }
 
         block_write (fs_device, sector, disk_inode);

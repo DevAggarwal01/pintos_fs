@@ -26,19 +26,17 @@ struct dir_entry
 bool dir_create (block_sector_t sector, size_t entry_cnt, block_sector_t parent_sector)
 {
   // create the inode that contains the data for the directory
-  if(!inode_create (sector, entry_cnt * sizeof (struct dir_entry))) {
+  if(!inode_create (sector, entry_cnt * sizeof (struct dir_entry), true)) {
     return false;
   }
 
   struct inode *inode = inode_open(sector);
   if(inode == NULL) {
-    inode_close(inode);
-    return false;
+    return false; 
   }
 
   struct dir *dir = dir_open(inode);
   if(dir == NULL) {
-    dir_close(dir);
     return false;
   }
 

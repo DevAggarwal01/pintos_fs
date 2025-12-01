@@ -122,6 +122,7 @@ int main (void)
   ide_init ();
   locate_block_devices ();
   filesys_init (format_filesys);
+  thread_current ()->current_dir = dir_open_root();
 #endif
 
   printf ("Boot complete.\n");

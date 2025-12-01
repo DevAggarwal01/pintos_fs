@@ -507,6 +507,7 @@ static void init_thread (struct thread *t, const char *name, int priority) {
     list_init(&t->fds); // initialize the file descriptor list
     t->next_fd = 2; // 0 and 1 are reserved for stdin and stdout
     t->exec_file = NULL;
+    t->current_dir = NULL;
     // disable interrupts
     enum intr_level old = intr_disable ();
     // add the thread to the all threads list

@@ -158,6 +158,13 @@ static void start_process (void *info){
     // set up parent and child record pointers
     t->parent = start_info->parent;
     t->child_record = start_info->rec;
+    
+    if (t->parent && t->parent->current_dir) {
+        t->current_dir = dir_reopen(t->parent->current_dir);
+    } else {
+        t->current_dir = dir_open_root();
+    }
+
     palloc_free_page(start_info);
     // the file name (full command line) is passed in via file_name_
     struct intr_frame if_;
@@ -247,6 +254,11 @@ void process_exit (void) {
     // record exit status in the corresponding child record, so parent can get it
     tid_t my_tid = thread_tid();
     // if child record exists, update it and wake up parent
+    if(cur->current_dir) {
+        dir_close(cur->current_dir);
+        cur->current_dir = NULL;
+    }
+
     if (cur->child_record && !cur->child_record->exited) {
         enum intr_level old = intr_disable();
         cur->child_record->exit_code = cur->exit_code;

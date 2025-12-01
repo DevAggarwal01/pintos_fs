@@ -6,6 +6,7 @@
 #include "filesys/free-map.h"
 #include "filesys/inode.h"
 #include "filesys/directory.h"
+#include "threads/thread.h"
 
 /* Partition that contains the file system. */
 struct block *fs_device;
@@ -42,8 +43,13 @@ static struct dir *get_parent_directory(const char *path, char leaf[NAME_MAX + 1
   if (path[0] == '/') {
       current_dir = dir_open_root();
   } else { // relative path
-      // TODO save directories in thread.working_directory and then access from there
+    struct thread *t = thread_current();
+
+    if (t->current_dir != NULL) {
+        current_dir = dir_reopen(t->current_dir);
+    } else {
       current_dir = dir_open_root();
+    }
   }
 
   if(current_dir == NULL) {
@@ -60,7 +66,7 @@ static struct dir *get_parent_directory(const char *path, char leaf[NAME_MAX + 1
   strlcpy(path_copy, path, len + 1);
 
   char *save_ptr;
-  char *token = strtok_r(path_copy, "/", &save_ptr);
+  char *token = strtok_r(path_copy, "/", &save_ptr); 
   
   // path is just "/"
   if(token == NULL) {
@@ -70,6 +76,12 @@ static struct dir *get_parent_directory(const char *path, char leaf[NAME_MAX + 1
   }
 
   while (token != NULL) {
+    if (strlen(token) > NAME_MAX) {
+        dir_close(current_dir);
+        free(path_copy);
+        return NULL;
+    }
+
     char *next_token = strtok_r(NULL, "/", &save_ptr);
 
     // this is the last file in the path
@@ -124,7 +136,7 @@ bool filesys_create (const char *name, off_t initial_size)
   }
 
   bool success = (dir != NULL && free_map_allocate (1, &inode_sector) &&
-                  inode_create (inode_sector, initial_size) &&
+                  inode_create (inode_sector, initial_size, false) &&
                   dir_add (dir, filename, inode_sector));
 
   if (!success && inode_sector != 0)
@@ -134,7 +146,76 @@ bool filesys_create (const char *name, off_t initial_size)
 
   return success;
 }
+// creates a folder for the mkdir system call
+bool filesys_mkdir (const char *name)
+{
+  block_sector_t inode_sector = 0;
+  char filename[NAME_MAX + 1];
+  
+  struct dir *parent_dir = get_parent_directory(name, filename);
+  
+  if (parent_dir == NULL) {
+      return false;
+  }
+  // don't allow the "." and ".." filenames to be created
+  if(filename[0] == '\0' || strcmp(filename, ".") == 0 || strcmp(filename, "..") == 0) {
+      dir_close(parent_dir);
+      return false;
+  }
+  // allocate space for the new directory inode
+  if(!free_map_allocate (1, &inode_sector)) {
+      dir_close(parent_dir);
+      return false;
+  }
+  
+  block_sector_t parent_sector = inode_get_inumber(dir_get_inode(parent_dir));
 
+  // create the directory
+  bool success = (parent_dir != NULL && dir_create (inode_sector, 16, parent_sector) &&
+                  dir_add (parent_dir, filename, inode_sector));
+
+  // fall back if unsuccessful
+  if (!success && inode_sector != 0)
+    free_map_release (inode_sector, 1);
+
+  dir_close (parent_dir);
+
+  return success;
+}
+// changes the current working directory for the chdir system call
+bool filesys_chdir (const char *name) {
+  char filename[NAME_MAX + 1];
+  
+  struct dir *parent_dir = get_parent_directory(name, filename);
+  
+  if (parent_dir == NULL) {
+      return false;
+  }
+
+  struct inode *inode;
+  if (!dir_lookup (parent_dir, filename, &inode)) {
+    dir_close (parent_dir);
+    return false;
+  }
+
+  // open the intended directory
+  struct dir *new_dir = dir_open(inode);
+  if (new_dir == NULL) {
+      dir_close(parent_dir);
+      return false;
+  }
+
+  dir_close(parent_dir);
+
+  // close current directory if we have one before reassigning to new directory
+  struct thread *t = thread_current();
+  if (t->current_dir != NULL) {
+      dir_close(t->current_dir);
+  }
+  t->current_dir = new_dir;
+
+  return true;
+}
 /* Opens the file with the given NAME.
    Returns the new file if successful or a null pointer
    otherwise.
@@ -168,6 +249,32 @@ struct file *filesys_open (const char *name)
   return file_open (inode);
 }
 
+struct inode *get_inode_from_path(const char *path) {
+    if (path == NULL || path[0] == '\0') {
+        return NULL;
+    }
+
+    if(strcmp(path, "/") == 0) {
+        return inode_open (ROOT_DIR_SECTOR);
+    }
+
+    char filename[NAME_MAX + 1];
+    struct dir *parent_dir = get_parent_directory(path, filename);
+    if (parent_dir == NULL) {
+        return NULL;
+    }
+
+    struct inode *inode = NULL;
+
+    if(!dir_lookup (parent_dir, filename, &inode)) {
+      // file does not exist
+      inode = NULL;
+    }
+
+    dir_close (parent_dir);
+    return inode;
+}
+
 /* Deletes the file named NAME.
    Returns true if successful, false on failure.
    Fails if no file named NAME exists,
@@ -177,6 +284,11 @@ bool filesys_remove (const char *name)
   if(name == NULL || name[0] == '\0') {
       return false;
   }
+
+  if(strcmp(name, "/") == 0) {
+      return false;
+  }
+
   char filename[NAME_MAX + 1];
   struct dir *parent_dir = get_parent_directory(name, filename);
   if (parent_dir == NULL) {

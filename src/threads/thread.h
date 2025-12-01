@@ -92,6 +92,8 @@ struct fd_entry {
     int fd;                  // file descriptor number
     struct file *f;          // pointer to the opened file   
     struct list_elem elem;   // list element for inclusion in a list
+    bool is_directory;       // indicates if fd refers to a directory or file
+    struct dir *dir;        // pointer to opened directory
 };
 
 // thread structure
@@ -119,6 +121,9 @@ struct thread {
     struct list fds;                        // list of file descriptor entries
     int next_fd;                            // next available file descriptor number
     struct file *exec_file;                 // deny writes to executable files
+
+    // for filesys
+    struct dir *current_dir;                // current directory of the thread
 
 #ifdef USERPROG
   /* Owned by userprog/process.c. */

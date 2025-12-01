@@ -10,6 +10,8 @@
 #include "threads/synch.h"
 #include "filesys/file.h"
 #include <string.h>
+#include "lib/user/syscall.h"
+#include "filesys/inode.h"
 
 // the function that handles all system calls
 static void syscall_handler (struct intr_frame *);
@@ -117,7 +119,7 @@ static char *copy_string(const char *user_str) {
  * Creates a new file descriptor entry for the given file in the current thread.
  * Returns pointer to the new file descriptor entry on success, NULL on failure.
  */
-static struct fd_entry *create_fd(struct file *file) {
+static struct fd_entry *create_fd(struct file *file, struct dir *dir, bool is_directory) {
     // get the current thread
     struct thread *t = thread_current();
     // allocate a page for a new file descriptor entry
@@ -128,6 +130,8 @@ static struct fd_entry *create_fd(struct file *file) {
     // initialize the entry and add it to the thread's file descriptor list
     fd_entry->fd = t->next_fd++;
     fd_entry->f = file;
+    fd_entry->is_directory = is_directory;
+    fd_entry->dir = dir;
     list_push_back(&t->fds, &fd_entry->elem);
     // return the new file descriptor entry
     return fd_entry;
@@ -322,29 +326,54 @@ static void syscall_handler (struct intr_frame *f UNUSED) {
             if (fileName[0] == '\0') {
                 palloc_free_page(fileName);
                 f->eax = -1;
-                return;
+                break;
             }
             // open the file (lock around file system call)
             lock_acquire(&file_lock);
-            struct file *file = filesys_open(fileName);
-            lock_release(&file_lock);
-            if (file == NULL) {
+            struct inode *inode = get_inode_from_path(fileName);
+            if (inode == NULL) {
+                lock_release(&file_lock);
                 palloc_free_page(fileName);
                 f->eax = -1;
                 break;
             }
-            // create a new file descriptor entry for the opened file
-            struct fd_entry *fd = create_fd(file);
+            // check if inode is a directory or file
+            bool is_directory = inode_is_directory(inode);
+            struct fd_entry *fd = NULL;
+            if(is_directory) {
+                struct dir *dir = dir_open(inode);
+                if(dir != NULL) {
+                    fd = create_fd(NULL, dir, true);
+                    if (fd == NULL) {
+                        dir_close(dir);
+                    }
+                } else {
+                    inode_close(inode);
+                }
+                
+            } else {
+                struct file *file = file_open(inode);
+                if (file != NULL) {
+                    fd = create_fd(file, NULL, false);
+                    if (fd == NULL) {
+                        file_close(file);
+                    }
+                } else {
+                    inode_close(inode);
+                }
+                
+            }
+            lock_release(&file_lock);
+            palloc_free_page(fileName);
+
+            // check if file descriptor entry was created successfully. this indicates whether open succeeded
             if (fd == NULL) {
                 // failed to create fd entry; close file and return -1
                 f->eax = -1;
-                file_close(file);
-                palloc_free_page(fileName);
                 break;
             }
             // return the new file descriptor number
-            f->eax = fd->fd;
-            palloc_free_page(fileName);
+            f->eax = fd->fd; 
             break;
         }
         // Case 8: for the CLOSE system call
@@ -356,11 +385,6 @@ static void syscall_handler (struct intr_frame *f UNUSED) {
             }
             // find the file descriptor entry
             struct fd_entry *fd_entry = find_fd(fd);
-            if (fd_entry == NULL) {
-                f->eax = -1;
-                break;
-            }
-            // get the file size (lock around file system call)
             lock_acquire(&file_lock);
             f->eax = file_length(fd_entry->f);
             lock_release(&file_lock);
@@ -549,9 +573,89 @@ static void syscall_handler (struct intr_frame *f UNUSED) {
             }
             // close the file and remove the fd entry (lock around file system call)
             lock_acquire(&file_lock);
-            file_close(fd_entry->f);
-            lock_release(&file_lock);
+            if (fd_entry->is_directory) {
+                dir_close(fd_entry->dir);
+            } else {
+                file_close(fd_entry->f);
+            }
             remove_fd(fd);
+            lock_release(&file_lock);
+            break;
+        }
+        // Case 14: for the CHDIR system call
+        case SYS_CHDIR: {
+            // get the directory name argument
+            const char *dirNamePtr;
+            if (!copy_data(&dirNamePtr, sp + 4, sizeof(const char *))) {
+                system_exit(-1);
+            }
+            if (dirNamePtr == NULL) {
+                system_exit(-1);
+            }
+            
+            char *dirName = copy_string((char *)dirNamePtr);
+            if (dirName == NULL) {
+                system_exit(-1);
+            }
+            // change the current directory (lock around file system call)
+            lock_acquire(&file_lock);
+            bool result = filesys_chdir(dirName);
+            lock_release(&file_lock);
+            palloc_free_page(dirName);
+            f->eax = result;
+            break;
+        }
+        // Case 15: for the MKDIR system call
+        case SYS_MKDIR: {
+            // get the directory name argument
+            const char *dirNamePtr;
+            if (!copy_data(&dirNamePtr, sp + 4, sizeof(const char *))) {
+                system_exit(-1);
+            }
+            if (dirNamePtr == NULL) {
+                system_exit(-1);
+            }
+            char *dirName = copy_string((char *)dirNamePtr);
+            if (dirName == NULL) {
+                system_exit(-1);
+            }
+            // make the directory
+            lock_acquire(&file_lock);
+            bool result = filesys_mkdir(dirName);
+            lock_release(&file_lock);
+            palloc_free_page(dirName);
+            f->eax = result;
+            break;
+        }
+        // Case 16: for the READDIR system call
+        case SYS_READDIR: {
+            int fd;
+            char *name;
+            if (!copy_data(&fd, sp + 4, sizeof(int))) {
+                system_exit(-1);
+            }
+            if (!copy_data(&name, sp + 8, sizeof(char *))) {
+                system_exit(-1);
+            }
+            if (name == NULL) {
+                system_exit(-1);
+            }
+            // find the file descriptor entry
+            struct fd_entry *fd_entry = find_fd(fd);
+            if (fd_entry == NULL || !fd_entry->is_directory) {
+                f->eax = false;
+                break;
+            }
+
+            char *kname[READDIR_MAX_LEN + 1];
+            
+        }
+        // Case 17: for the ISDIR system call
+        case SYS_ISDIR: {
+            break;
+        }
+        // Case 18: for the INUMBER system call
+        case SYS_INUMBER: {
             break;
         }
         default:
