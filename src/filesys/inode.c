@@ -59,6 +59,10 @@ bool inode_is_directory (const struct inode *inode) {
   return inode->data.is_directory != 0;
 }
 
+bool get_open_cnt(const struct inode *inode) {
+  return inode->open_cnt;
+}
+
 /**
  * converts a data block index (0-based) into a block sector_t
  */

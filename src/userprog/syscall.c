@@ -12,6 +12,7 @@
 #include <string.h>
 #include "lib/user/syscall.h"
 #include "filesys/inode.h"
+#include "filesys/directory.h"
 
 // the function that handles all system calls
 static void syscall_handler (struct intr_frame *);
@@ -647,15 +648,74 @@ static void syscall_handler (struct intr_frame *f UNUSED) {
                 break;
             }
 
-            char *kname[READDIR_MAX_LEN + 1];
-            
+            char kname[READDIR_MAX_LEN + 1];
+            bool success = false;
+            lock_acquire(&file_lock);
+            while(true) {
+                // read next file entry in directory
+                success = dir_readdir(fd_entry->dir, kname);
+                // if can't find an entry, break
+                if (!success) {
+                    break;
+                }
+                // skip "." and ".." entries
+                if (strcmp(kname, ".") == 0 || strcmp(kname, "..") == 0) {
+                    continue;
+                } else {
+                    // successfully read a valid entry
+                    break;
+                }
+            }
+            lock_release(&file_lock);
+
+            if (success) {
+                // copy the name to user space
+                size_t length = strlen(kname);
+                if (length > READDIR_MAX_LEN) {
+                    length = READDIR_MAX_LEN;
+                }
+                memcpy(name, kname, length);
+                name[length] = '\0'; // null-terminate
+                f->eax = true;
+            } else {
+                f->eax = false;
+            }
+            break;
         }
         // Case 17: for the ISDIR system call
         case SYS_ISDIR: {
+            int fd;
+            if (!copy_data(&fd, sp + 4, sizeof(int))) {
+                system_exit(-1);
+            }
+            // find the file descriptor entry
+            struct fd_entry *fd_entry = find_fd(fd);
+            if (fd_entry == NULL) {
+                f->eax = false;
+                break;
+            }
+            f->eax = fd_entry->is_directory;
             break;
         }
         // Case 18: for the INUMBER system call
         case SYS_INUMBER: {
+            int fd;
+            if (!copy_data(&fd, sp + 4, sizeof(int))) {
+                system_exit(-1);
+            }
+            // find the file descriptor entry
+            struct fd_entry *fd_entry = find_fd(fd);
+            if (fd_entry == NULL) {
+                f->eax = -1;
+                break;
+            }
+            struct inode *inode;
+            if (fd_entry->is_directory) {
+                inode = dir_get_inode(fd_entry->dir);
+            } else {
+                inode = file_get_inode(fd_entry->f);
+            }
+            f->eax = inode_get_inumber(inode);
             break;
         }
         default:

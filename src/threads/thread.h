@@ -5,6 +5,9 @@
 #include <list.h>
 #include <stdint.h>
 
+/* Forward declarations */
+struct inode;
+
 /* States in a thread's life cycle. */
 enum thread_status
 {
@@ -173,5 +176,7 @@ int thread_get_recent_cpu (void);
 int thread_get_load_avg (void);
 
 bool compare_thread_priority(const struct list_elem *a, const struct list_elem *b, void *aux UNUSED);
+
+bool inode_is_working_directory (struct inode *inode);
 
 #endif /* threads/thread.h */

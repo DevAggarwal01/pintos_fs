@@ -14,6 +14,7 @@
 #ifdef USERPROG
 #include "userprog/process.h"
 #endif
+#include "devices/block.h"
 
 /* Random value for struct thread's `magic' member.
    Used to detect stack overflow.  See the big comment at the top
@@ -619,6 +620,22 @@ static tid_t allocate_tid (void)
   lock_release (&tid_lock);
 
   return tid;
+}
+
+// HELPER: checks if the given inode is any process's working directory
+bool inode_is_working_directory (struct inode *inode) {
+  struct list_elem * process_elem;
+  for (process_elem = list_begin (&all_list); process_elem != list_end (&all_list); process_elem = list_next (process_elem)) {
+    struct thread *t = list_entry (process_elem, struct thread, allelem);
+    if(t->current_dir != NULL) {
+      block_sector_t current_dir_sector = inode_get_inumber(dir_get_inode(t->current_dir));
+      block_sector_t inode_sector = inode_get_inumber(inode);
+      if (current_dir_sector == inode_sector) {
+        return true;
+      }
+    }
+  }
+  return false;
 }
 
 /* Offset of `stack' member within `struct thread'.

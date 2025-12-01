@@ -301,6 +301,50 @@ bool filesys_remove (const char *name)
       return false;
   }
 
+  // check if file or directory
+  struct inode *inode = NULL;
+  if (!dir_lookup (parent_dir, filename, &inode)) {
+      dir_close (parent_dir);
+      return false;;
+  }
+
+  bool is_directory = inode_is_directory(inode);
+
+  if(is_directory) {
+      // don't allow removal if directory is opened by anyone else
+      if(get_open_cnt(inode) > 1 || inode_is_working_directory(inode)) {
+          inode_close(inode);
+          dir_close(parent_dir);
+          return false;
+      }
+      struct dir *dir_to_remove = dir_open(inode);
+      if(dir_to_remove == NULL) {
+          dir_close(parent_dir);
+          inode_close(inode);
+          return false;
+      }
+
+      // dir_open takes ownership so no need to close
+      inode = NULL;
+
+      // check if directory is empty
+      char temp_name[NAME_MAX + 1];
+      while(dir_readdir(dir_to_remove, temp_name)) {
+        // ignore the "." and ".." files
+        if(strcmp(temp_name, ".") != 0 && strcmp(temp_name, "..") != 0) {
+            // directory is not empty, which is a problem
+            dir_close(dir_to_remove);
+            dir_close(parent_dir);
+            return false;
+        }
+      }
+      dir_close(dir_to_remove);
+  }
+
+  if (inode != NULL) {
+      inode_close(inode);
+  }
+
   bool success = parent_dir != NULL && dir_remove (parent_dir, filename);
   dir_close (parent_dir);
 
