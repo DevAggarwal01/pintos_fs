@@ -17,7 +17,7 @@
 // the function that handles all system calls
 static void syscall_handler (struct intr_frame *);
 // lock for file system operations
-struct lock file_lock;
+// struct lock file_lock;
 
 /**
  * Initializes the system call system by setting the system call interrupt gate
@@ -28,7 +28,7 @@ void syscall_init (void)
     // initialize the syscall handler.
     intr_register_int (0x30, 3, INTR_ON, syscall_handler, "syscall");
     // initialize the file lock
-    lock_init(&file_lock);
+    // lock_init(&file_lock);
 }
 
 /**
@@ -274,9 +274,9 @@ static void syscall_handler (struct intr_frame *f UNUSED) {
                 return;
             }
             // create the file and return the result (lock around file system call)
-            lock_acquire(&file_lock);
+            // lock_acquire(&file_lock);
             f->eax = filesys_create(file, initial_size);
-            lock_release(&file_lock);
+            // lock_release(&file_lock);
             palloc_free_page(file);
             break;
         }
@@ -302,9 +302,9 @@ static void syscall_handler (struct intr_frame *f UNUSED) {
                 return;
             }
             // remove the file and return the result (lock around file system call)
-            lock_acquire(&file_lock);
+            // lock_acquire(&file_lock);
             f->eax = filesys_remove(file);
-            lock_release(&file_lock);
+            // lock_release(&file_lock);
             palloc_free_page(file);
             break;
         }
@@ -330,10 +330,10 @@ static void syscall_handler (struct intr_frame *f UNUSED) {
                 break;
             }
             // open the file (lock around file system call)
-            lock_acquire(&file_lock);
+            // lock_acquire(&file_lock);
             struct inode *inode = get_inode_from_path(fileName);
             if (inode == NULL) {
-                lock_release(&file_lock);
+                // lock_release(&file_lock);
                 palloc_free_page(fileName);
                 f->eax = -1;
                 break;
@@ -364,7 +364,7 @@ static void syscall_handler (struct intr_frame *f UNUSED) {
                 }
                 
             }
-            lock_release(&file_lock);
+            // lock_release(&file_lock);
             palloc_free_page(fileName);
 
             // check if file descriptor entry was created successfully. this indicates whether open succeeded
@@ -386,9 +386,9 @@ static void syscall_handler (struct intr_frame *f UNUSED) {
             }
             // find the file descriptor entry
             struct fd_entry *fd_entry = find_fd(fd);
-            lock_acquire(&file_lock);
+            // lock_acquire(&file_lock);
             f->eax = file_length(fd_entry->f);
-            lock_release(&file_lock);
+            // lock_release(&file_lock);
             break;
         }
         // Case 9: for the READ system call
@@ -443,9 +443,9 @@ static void syscall_handler (struct intr_frame *f UNUSED) {
                 break;
             }
             // read from the file (lock around file system call)
-            lock_acquire(&file_lock);
+            // lock_acquire(&file_lock);
             f->eax = file_read(fd_entry->f, buffer, size);
-            lock_release(&file_lock);
+            // lock_release(&file_lock);
             break;
         }
         // Case 10: for the WRITE system call
@@ -502,7 +502,7 @@ static void syscall_handler (struct intr_frame *f UNUSED) {
                     break;
                 }
                 // write to the file (lock around file system call)
-                lock_acquire(&file_lock);
+                // lock_acquire(&file_lock);
                 int written = 0;
                 // write in a loop until all bytes are written
                 while (written < (int)size) {
@@ -513,7 +513,7 @@ static void syscall_handler (struct intr_frame *f UNUSED) {
                     }
                     written += wrote;
                 }
-                lock_release(&file_lock);
+                // lock_release(&file_lock);
                 f->eax = written;
                 break;
             }
@@ -535,9 +535,9 @@ static void syscall_handler (struct intr_frame *f UNUSED) {
                 system_exit(-1);
             }
             // seek to the position in the file (lock around file system call)
-            lock_acquire(&file_lock);
+            // lock_acquire(&file_lock);
             file_seek(fd_entry->f, position);
-            lock_release(&file_lock);
+            // lock_release(&file_lock);
             break;
         }
         // Case 12: for the TELL system call
@@ -554,9 +554,9 @@ static void syscall_handler (struct intr_frame *f UNUSED) {
                 break;
             }
             // tell the current position in the file (lock around file system call)
-            lock_acquire(&file_lock);
+            // lock_acquire(&file_lock);
             f->eax = file_tell(fd_entry->f);
-            lock_release(&file_lock);
+            // lock_release(&file_lock);
             break;
         }
         // Case 13: for the CLOSE system call
@@ -573,14 +573,14 @@ static void syscall_handler (struct intr_frame *f UNUSED) {
                 break;
             }
             // close the file and remove the fd entry (lock around file system call)
-            lock_acquire(&file_lock);
+            // lock_acquire(&file_lock);
             if (fd_entry->is_directory) {
                 dir_close(fd_entry->dir);
             } else {
                 file_close(fd_entry->f);
             }
             remove_fd(fd);
-            lock_release(&file_lock);
+            // lock_release(&file_lock);
             break;
         }
         // Case 14: for the CHDIR system call
@@ -599,9 +599,9 @@ static void syscall_handler (struct intr_frame *f UNUSED) {
                 system_exit(-1);
             }
             // change the current directory (lock around file system call)
-            lock_acquire(&file_lock);
+            // lock_acquire(&file_lock);
             bool result = filesys_chdir(dirName);
-            lock_release(&file_lock);
+            // lock_release(&file_lock);
             palloc_free_page(dirName);
             f->eax = result;
             break;
@@ -621,9 +621,9 @@ static void syscall_handler (struct intr_frame *f UNUSED) {
                 system_exit(-1);
             }
             // make the directory
-            lock_acquire(&file_lock);
+            // lock_acquire(&file_lock);
             bool result = filesys_mkdir(dirName);
-            lock_release(&file_lock);
+            // lock_release(&file_lock);
             palloc_free_page(dirName);
             f->eax = result;
             break;
@@ -650,7 +650,7 @@ static void syscall_handler (struct intr_frame *f UNUSED) {
 
             char kname[READDIR_MAX_LEN + 1];
             bool success = false;
-            lock_acquire(&file_lock);
+            // lock_acquire(&file_lock);
             while(true) {
                 // read next file entry in directory
                 success = dir_readdir(fd_entry->dir, kname);
@@ -666,7 +666,7 @@ static void syscall_handler (struct intr_frame *f UNUSED) {
                     break;
                 }
             }
-            lock_release(&file_lock);
+            // lock_release(&file_lock);
 
             if (success) {
                 // copy the name to user space

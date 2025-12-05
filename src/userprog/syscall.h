@@ -5,6 +5,6 @@ void syscall_init (void);
 void remove_fd(int fd);
 void system_exit (int status);
 
-extern struct lock file_lock;
+// extern struct lock file_lock;
 
 #endif /* userprog/syscall.h */

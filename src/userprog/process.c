@@ -101,9 +101,9 @@ process_execute (const char *file_name) {
         return TID_ERROR;
     }
     // check that the program file exists before creating thread
-    lock_acquire(&file_lock);
+    // // lock_acquire(&file_lock);
     struct file *file = filesys_open(program);
-    lock_release(&file_lock);
+    // // lock_release(&file_lock);
     if (file == NULL) {
         enum intr_level old_level = intr_disable();
         list_remove(&rec->elem_child);
@@ -268,11 +268,11 @@ void process_exit (void) {
     }
     // close executable file, allow writes
     if (cur->exec_file != NULL) {
-        lock_acquire(&file_lock);
-        file_allow_write(cur->exec_file);
+        // lock_acquire(&file_lock);
+        file_allow_write(cur->exec_file); 
         file_close(cur->exec_file);
-        lock_release(&file_lock);
-        cur->exec_file = NULL;
+        // lock_release(&file_lock);
+        cur->exec_file = NULL; 
     }
     // close all open files and free file descriptors
     while(!list_empty(&cur->fds)) {
@@ -284,9 +284,9 @@ void process_exit (void) {
         struct list_elem *e = list_begin(&cur->fds);
         struct fd_entry *fd_entry = list_entry(e, struct fd_entry, elem);
         intr_set_level(old);
-        lock_acquire(&file_lock);
+        // lock_acquire(&file_lock);
         file_close(fd_entry->f);
-        lock_release(&file_lock);
+        // lock_release(&file_lock);
         remove_fd(fd_entry->fd);
     }
     /* Destroy the current process's page directory and switch back
@@ -421,14 +421,14 @@ bool load (const char *file_name, void (**eip) (void), void **esp) {
     char *save_ptr;
     char *program = strtok_r(file_copy, " ", &save_ptr);
     // open the file using the first word (which is the program name)
-    lock_acquire(&file_lock);
+    // lock_acquire(&file_lock);
     file = filesys_open(program);
     if (file != NULL) {
         /* Keep the file and prevent other writers while we execute it. */
         t->exec_file = file;
         file_deny_write(file);
     }
-    lock_release(&file_lock);
+    // lock_release(&file_lock);
     if (file == NULL) {
         printf ("load: %s: open failed\n", file_name);
         goto done;

@@ -6,6 +6,7 @@
 #include "filesys/filesys.h"
 #include "filesys/free-map.h"
 #include "threads/malloc.h"
+#include "threads/synch.h"
 
 /* Identifies an inode. */
 #define INODE_MAGIC 0x494e4f44
@@ -20,7 +21,7 @@
 
 
 // used as a buffer to initialize indirect blocks with zeros
-static block_sector_t empty_block[INDIRECT_BLOCK_ENTRIES];
+static block_sector_t empty_block[INDIRECT_BLOCK_ENTRIES]; 
 
 /* On-disk inode.
    Must be exactly BLOCK_SECTOR_SIZE bytes long. */
@@ -36,6 +37,52 @@ struct inode_disk
   block_sector_t indirect;    /* Indirect block */
   block_sector_t double_indirect; /* Double indirect block */
 };
+
+
+void monitor_init(struct monitor *mon) {
+  lock_init(&mon->lock);
+  cond_init(&mon->cond);
+  mon->readers = 0;
+  mon->writer = false;
+}
+
+void monitor_read_enter(struct monitor *mon) {
+  lock_acquire(&mon->lock);
+  // wait for writer to finish
+  while (mon->writer) {
+    cond_wait(&mon->cond, &mon->lock);
+  }
+  mon->readers++;
+  lock_release(&mon->lock);
+}
+
+void monitor_read_exit(struct monitor *mon) {
+  lock_acquire(&mon->lock);
+  mon->readers--;
+  // if no more readers, wake up any waiting writers
+  if (mon->readers == 0) {
+    cond_signal(&mon->cond, &mon->lock);
+  }
+  lock_release(&mon->lock);
+}
+
+void monitor_write_enter(struct monitor *mon) {
+  lock_acquire(&mon->lock);
+  // wait for readers to finish. also only 1 file extending write can happen at a time
+  while (mon->writer || mon->readers > 0) {
+    cond_wait(&mon->cond, &mon->lock);
+  }
+  mon->writer = true;
+  lock_release(&mon->lock);
+}
+
+void monitor_write_exit(struct monitor *mon) {
+  lock_acquire(&mon->lock);
+  mon->writer = false;
+  // wake up all waiting readers and writers since no one is writing now
+  cond_broadcast(&mon->cond, &mon->lock);
+  lock_release(&mon->lock);
+}
 
 /* Returns the number of sectors to allocate for an inode SIZE
    bytes long. */
@@ -53,6 +100,8 @@ struct inode
   bool removed;           /* True if deleted, false otherwise. */
   int deny_write_cnt;     /* 0: writes ok, >0: deny writes. */
   struct inode_disk data; /* Inode content. */
+
+  struct monitor mon;     /* Monitor for synchronization */
 };
 
 bool inode_is_directory (const struct inode *inode) {
@@ -322,7 +371,9 @@ static block_sector_t byte_to_sector (const struct inode *inode, off_t pos)
 static struct list open_inodes;
 
 /* Initializes the inode module. */
-void inode_init (void) { list_init (&open_inodes); }
+void inode_init (void) { 
+  list_init (&open_inodes);
+}
 
 /* Initializes an inode with LENGTH bytes of data and
    writes the new inode to sector SECTOR on the file system
@@ -398,6 +449,7 @@ struct inode *inode_open (block_sector_t sector)
   inode->open_cnt = 1;
   inode->deny_write_cnt = 0;
   inode->removed = false;
+  monitor_init(&inode->mon);
   block_read (fs_device, inode->sector, &inode->data);
   return inode;
 }
@@ -434,8 +486,10 @@ void inode_close (struct inode *inode)
       /* Deallocate blocks if removed. */
       if (inode->removed)
         {
+          monitor_write_enter(&inode->mon);
           deallocate_all_blocks(&inode->data);
           free_map_release (inode->sector, 1);
+          monitor_write_exit(&inode->mon);
         }
 
       free (inode);
@@ -459,6 +513,9 @@ off_t inode_read_at (struct inode *inode, void *buffer_, off_t size,
   uint8_t *buffer = buffer_;
   off_t bytes_read = 0;
   uint8_t *bounce = NULL;
+
+  // allow concurrent reads
+  monitor_read_enter(&inode->mon);
 
   while (size > 0)
     {
@@ -502,6 +559,9 @@ off_t inode_read_at (struct inode *inode, void *buffer_, off_t size,
     }
   free (bounce);
 
+  // release read monitor since operation is over
+  monitor_read_exit(&inode->mon);
+
   return bytes_read;
 }
 
@@ -544,11 +604,26 @@ off_t inode_write_at (struct inode *inode, const void *buffer_, off_t size,
 
   if (inode->deny_write_cnt)
     return 0;
-  
-  // if write goes beyond the EOF then extend the inode capacity first
+    
   off_t end_offset = offset + size;
+
+  bool is_extending_write = false;
+  if (end_offset > inode->data.length) {
+    is_extending_write = true;
+  }
+  if (is_extending_write) {
+    // exclusive access for extending writes
+    monitor_write_enter(&inode->mon);
+  } else {
+    // allow concurrent reads and non-extending writes
+    monitor_read_enter(&inode->mon);
+  }
+
+
+  // if write goes beyond the EOF then extend the inode capacity first
   if (end_offset > inode->data.length) {
     if (!extend_capacity(inode, end_offset)) {
+      monitor_write_exit(&inode->mon);
       return 0;
     }
   }
@@ -600,6 +675,12 @@ off_t inode_write_at (struct inode *inode, const void *buffer_, off_t size,
       offset += chunk_size;
       bytes_written += chunk_size;
     }
+  
+  if (is_extending_write) {
+    monitor_write_exit(&inode->mon);
+  } else {
+    monitor_read_exit(&inode->mon);
+  }
   free (bounce);
 
   return bytes_written;
