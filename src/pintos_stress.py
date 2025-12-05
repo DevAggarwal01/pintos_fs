@@ -11,7 +11,6 @@ if len(sys.argv) != 3:
 
 num_times = int(sys.argv[2])
 seen = set()
-
 os.chdir(sys.argv[1])
 for _ in range(num_times):
     print("Starting a cycle")
