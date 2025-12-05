@@ -108,8 +108,9 @@ bool inode_is_directory (const struct inode *inode) {
   return inode->data.is_directory != 0;
 }
 
-bool get_open_cnt(const struct inode *inode) {
-  return inode->open_cnt;
+int get_open_cnt(const struct inode *inode) {
+  // return the current open count of this inode
+  return inode != NULL ? inode->open_cnt : 0;
 }
 
 /**

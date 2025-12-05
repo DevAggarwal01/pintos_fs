@@ -185,7 +185,22 @@ bool filesys_mkdir (const char *name)
 // changes the current working directory for the chdir system call
 bool filesys_chdir (const char *name) {
   char filename[NAME_MAX + 1];
-  
+    if (name == NULL || strcmp(name, "") == 0) {
+        return false;
+    }
+
+    if (strcmp(name, "/") == 0) {
+        struct dir *root = dir_open_root();
+        if (root == NULL) return false;
+
+        struct thread *t = thread_current();
+        if (t->current_dir != NULL) {
+            dir_close(t->current_dir);
+        }
+        t->current_dir = root;
+        return true;
+    }
+
   struct dir *parent_dir = get_parent_directory(name, filename);
   
   if (parent_dir == NULL) {
@@ -221,33 +236,47 @@ bool filesys_chdir (const char *name) {
    otherwise.
    Fails if no file named NAME exists,
    or if an internal memory allocation fails. */
-struct file *filesys_open (const char *name)
-{
-  if (name == NULL || name[0] == '\0') {
-      return NULL;
+struct file *filesys_open (const char *name) {
+  // disallow null or empty names
+  if (name == NULL || strcmp(name, "") == 0) {
+    return NULL;
   }
 
-  if(strcmp(name, "/") == 0) {
-      struct inode *root_inode = inode_open (ROOT_DIR_SECTOR);
-      return file_open(root_inode);
+  // special case: open root directory
+  if (strcmp(name, "/") == 0) {
+    struct inode *root_inode = inode_open(ROOT_DIR_SECTOR);
+    if (root_inode == NULL) {
+        return NULL;
+    };
+
+    // reopen to bump open count
+    struct inode *reopened = inode_reopen(root_inode);
+    return file_open(reopened);
   }
 
   char filename[NAME_MAX + 1];
   struct dir *parent_dir = get_parent_directory(name, filename);
   if (parent_dir == NULL) {
-      return NULL;
+    return NULL;
   }
 
   struct inode *inode = NULL;
-
-  if(!dir_lookup (parent_dir, filename, &inode)) {
-    // file_open can handle a null inode
+  if (!dir_lookup(parent_dir, filename, &inode)) {
     inode = NULL;
   }
 
-  dir_close (parent_dir);
-  return file_open (inode);
+  dir_close(parent_dir);
+
+  // if target is a directory, reopen to increase open count
+  if (inode != NULL && inode_is_directory(inode)) {
+    struct inode *reopened = inode_reopen(inode);
+    return file_open(reopened);
+  }
+
+  return file_open(inode);
 }
+
+
 
 struct inode *get_inode_from_path(const char *path) {
     if (path == NULL || path[0] == '\0') {
@@ -279,77 +308,76 @@ struct inode *get_inode_from_path(const char *path) {
    Returns true if successful, false on failure.
    Fails if no file named NAME exists,
    or if an internal memory allocation fails. */
-bool filesys_remove (const char *name)
-{
-  if(name == NULL || name[0] == '\0') {
-      return false;
+bool filesys_remove (const char *name) {
+  if (name == NULL || strcmp(name, "") == 0) {
+    return false;
   }
 
-  if(strcmp(name, "/") == 0) {
-      return false;
+  // disallow removing the root directory
+  if (strcmp(name, "/") == 0) {
+    return false;
   }
 
   char filename[NAME_MAX + 1];
   struct dir *parent_dir = get_parent_directory(name, filename);
   if (parent_dir == NULL) {
-      return false;
+    return false;
   }
 
-  // don't allow the "." and ".." filenames to be removed
-  if(filename[0] == '\0' || strcmp(filename, ".") == 0 || strcmp(filename, "..") == 0) {
-      dir_close(parent_dir);
-      return false;
+  // disallow removing "." or ".." special entries
+  if (strcmp(filename, "") == 0 || strcmp(filename, ".") == 0 || strcmp(filename, "..") == 0) {
+    dir_close(parent_dir);
+    return false;
   }
 
-  // check if file or directory
   struct inode *inode = NULL;
-  if (!dir_lookup (parent_dir, filename, &inode)) {
-      dir_close (parent_dir);
-      return false;;
+  if (!dir_lookup(parent_dir, filename, &inode)) {
+    dir_close(parent_dir);
+    return false;
   }
 
   bool is_directory = inode_is_directory(inode);
 
-  if(is_directory) {
-      // don't allow removal if directory is opened by anyone else
-      if(get_open_cnt(inode) > 1 || inode_is_working_directory(inode)) {
-          inode_close(inode);
-          dir_close(parent_dir);
-          return false;
-      }
-      struct dir *dir_to_remove = dir_open(inode);
-      if(dir_to_remove == NULL) {
-          dir_close(parent_dir);
-          inode_close(inode);
-          return false;
-      }
+  if (is_directory) {
+    // disallow removing if open count > 1 or inode is in use as a working directory
+    if (get_open_cnt(inode) > 1 || inode_is_working_directory(inode)) {
+      inode_close(inode);
+      dir_close(parent_dir);
+      return false;
+    }
 
-      // dir_open takes ownership so no need to close
-      inode = NULL;
+    struct dir *dir_to_remove = dir_open(inode);
+    if (dir_to_remove == NULL) {
+      inode_close(inode);
+      dir_close(parent_dir);
+      return false;
+    }
 
-      // check if directory is empty
-      char temp_name[NAME_MAX + 1];
-      while(dir_readdir(dir_to_remove, temp_name)) {
-        // ignore the "." and ".." files
-        if(strcmp(temp_name, ".") != 0 && strcmp(temp_name, "..") != 0) {
-            // directory is not empty, which is a problem
-            dir_close(dir_to_remove);
-            dir_close(parent_dir);
-            return false;
-        }
+    // check if directory is empty (ignore "." and "..")
+    char temp_name[NAME_MAX + 1];
+    while (dir_readdir(dir_to_remove, temp_name)) {
+      if (strcmp(temp_name, ".") != 0 && strcmp(temp_name, "..") != 0) {
+        dir_close(dir_to_remove);
+        dir_close(parent_dir);
+        return false;
       }
-      dir_close(dir_to_remove);
+    }
+
+    dir_close(dir_to_remove);
+
+    // dir_open took ownership of the inode, so we should not close it again
+    inode = NULL;
   }
 
   if (inode != NULL) {
-      inode_close(inode);
+    inode_close(inode);
   }
 
-  bool success = parent_dir != NULL && dir_remove (parent_dir, filename);
-  dir_close (parent_dir);
-
+  bool success = dir_remove(parent_dir, filename);
+  dir_close(parent_dir);
   return success;
 }
+
 
 /* Formats the file system. */
 static void do_format (void)

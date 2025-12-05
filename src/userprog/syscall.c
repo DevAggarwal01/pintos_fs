@@ -442,6 +442,11 @@ static void syscall_handler (struct intr_frame *f UNUSED) {
                 f->eax = -1;
                 break;
             }
+            // disallow reads to directories
+            if (fd_entry->is_directory) {
+                f->eax = -1;
+                break;
+            }
             // read from the file (lock around file system call)
             // lock_acquire(&file_lock);
             f->eax = file_read(fd_entry->f, buffer, size);
@@ -498,6 +503,11 @@ static void syscall_handler (struct intr_frame *f UNUSED) {
                 // find the file descriptor entry
                 struct fd_entry *fd_entry = find_fd(fd);
                 if (fd_entry == NULL) {
+                    f->eax = -1;
+                    break;
+                }
+                // disallow writes to directories
+                if (fd_entry->is_directory) {
                     f->eax = -1;
                     break;
                 }
