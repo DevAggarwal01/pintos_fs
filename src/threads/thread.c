@@ -613,7 +613,7 @@ static void schedule (void)
 static tid_t allocate_tid (void)
 {
   static tid_t next_tid = 1;
-  tid_t tid;
+  tid_t tid; 
 
   lock_acquire (&tid_lock);
   tid = next_tid++;

@@ -44,7 +44,7 @@ struct inode {
     bool removed;                // true if deleted but still open
     int deny_write_cnt;          // 0 allows writes, >0 denies writes
     struct inode_disk data;      // cached on disk inode contents
-    struct monitor mon;          // monitor for synchronization
+    struct lock extend_file_write_lock;          // lock for synchronization
 };
 
 // list of all currently open inodes
@@ -69,53 +69,6 @@ static bool deallocate_all_blocks(struct inode_disk *d);
 
 // grows inode to be able to represent new_length bytes
 static bool extend_capacity(struct inode *inode, off_t new_length);
-
-// monitor initialization
-void monitor_init(struct monitor *mon) {
-    lock_init(&mon->lock);
-    cond_init(&mon->cond);
-    mon->readers = 0;
-    mon->writer = false;
-}
-
-// acquires shared read access on the monitor
-void monitor_read_enter(struct monitor *mon) {
-    lock_acquire(&mon->lock);
-    while (mon->writer) {
-        cond_wait(&mon->cond, &mon->lock);
-    }
-    mon->readers++;
-    lock_release(&mon->lock);
-}
-
-// releases shared read access on the monitor
-void monitor_read_exit(struct monitor *mon) {
-    lock_acquire(&mon->lock);
-    mon->readers--;
-    if (mon->readers == 0) {
-        cond_signal(&mon->cond, &mon->lock);
-    }
-    lock_release(&mon->lock);
-}
-
-// acquires exclusive write access on the monitor
-void monitor_write_enter(struct monitor *mon) {
-    lock_acquire(&mon->lock);
-    // wait for any active writer and all readers to finish
-    while (mon->writer || mon->readers > 0) {
-        cond_wait(&mon->cond, &mon->lock);
-    }
-    mon->writer = true;
-    lock_release(&mon->lock);
-}
-
-// releases exclusive write access on the monitor
-void monitor_write_exit(struct monitor *mon) {
-    lock_acquire(&mon->lock);
-    mon->writer = false;
-    cond_broadcast(&mon->cond, &mon->lock);
-    lock_release(&mon->lock);
-}
 
 // returns true if inode represents a directory
 bool inode_is_directory(const struct inode *inode) {
@@ -466,7 +419,7 @@ struct inode *inode_open(block_sector_t sector) {
     inode->open_cnt = 1;
     inode->removed = false;
     inode->deny_write_cnt = 0;
-    monitor_init(&inode->mon);
+    lock_init(&inode->extend_file_write_lock);
 
     list_push_front(&open_inodes, &inode->elem);
     block_read(fs_device, inode->sector, &inode->data);
@@ -522,7 +475,13 @@ off_t inode_read_at(struct inode *inode, void *buffer_, off_t size, off_t offset
     uint8_t *bounce = NULL;
 
     // allow concurrent readers and non extending writers
-    monitor_read_enter(&inode->mon);
+    off_t end_offset = offset + size;
+    bool inode_len = inode_length(inode);
+    bool touches_end = size > 0 && offset <= inode_len && end_offset > inode_len;
+
+    if(touches_end) {
+      lock_acquire(&inode->extend_file_write_lock);
+    }
 
     while (size > 0) {
         // stop if offset is already past end of file
@@ -563,7 +522,11 @@ off_t inode_read_at(struct inode *inode, void *buffer_, off_t size, off_t offset
     }
 
     free(bounce);
-    monitor_read_exit(&inode->mon);
+    
+    if(touches_end) {
+      lock_release(&inode->extend_file_write_lock);
+    }
+
     return bytes_read;
 }
 
@@ -580,21 +543,24 @@ off_t inode_write_at(struct inode *inode, const void *buffer_, off_t size, off_t
     }
 
     off_t end_offset = offset + size;
-    bool is_extending_write = false;
-    if (end_offset > inode->data.length) {
-        is_extending_write = true;
+    bool is_extending_write = end_offset > inode->data.length;
+
+    bool writes_to_eof = !is_extending_write && end_offset == inode->data.length && size > 0 && offset < inode->data.length;
+
+    bool need_lock = is_extending_write || writes_to_eof;
+
+    if(need_lock) {
+        lock_acquire(&inode->extend_file_write_lock);
     }
 
     // writers that extend the file take exclusive monitor access
     if (is_extending_write) {
-        monitor_write_enter(&inode->mon);
         if (!extend_capacity(inode, end_offset)) {
-            monitor_write_exit(&inode->mon);
+            if(need_lock) {
+                lock_release(&inode->extend_file_write_lock);
+            }
             return 0;
         }
-    } else {
-        // non extending writes share monitor with reads
-        monitor_read_enter(&inode->mon);
     }
 
     while (size > 0) {
@@ -639,10 +605,8 @@ off_t inode_write_at(struct inode *inode, const void *buffer_, off_t size, off_t
     }
 
     free(bounce);
-    if (is_extending_write) {
-        monitor_write_exit(&inode->mon);
-    } else {
-        monitor_read_exit(&inode->mon);
+    if (need_lock) {
+        lock_release(&inode->extend_file_write_lock);
     }
 
     return bytes_written;
