@@ -247,18 +247,25 @@ int process_wait (tid_t child_tid) {
 }
 
 /* Free the current process's resources. */
-void process_exit (void) {
+void
+process_exit (void) {
     // get current thread and its page directory
     struct thread *cur = thread_current();
     uint32_t *pd;
     // record exit status in the corresponding child record, so parent can get it
     tid_t my_tid = thread_tid();
+
+    // print program exit status for user processes
+    if (cur->pagedir != NULL) {
+        printf ("%s: exit(%d)\n", cur->name, cur->exit_code);
+    }
+
     // if child record exists, update it and wake up parent
     if(cur->current_dir) {
         dir_close(cur->current_dir);
         cur->current_dir = NULL;
     }
-
+    
     if (cur->child_record && !cur->child_record->exited) {
         enum intr_level old = intr_disable();
         cur->child_record->exit_code = cur->exit_code;
@@ -305,6 +312,7 @@ void process_exit (void) {
         pagedir_destroy (pd);
     }
 }
+
 
 /* Sets up the CPU for running user code in the current
    thread.

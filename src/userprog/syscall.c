@@ -38,15 +38,6 @@ void system_exit (int status){
     // get the current thread and set its exit code
     struct thread *t = thread_current();
     t->exit_code = status;
-    // record exit status in the corresponding child record, so parent can get it
-    if (t->child_record != NULL) {
-        t->child_record->exit_code = status;
-        t->child_record->exited = true;
-        sema_up(&t->child_record->exit_sema);
-    }
-    // print exit message and terminate the thread
-    printf("%s: exit(%d)\n", t->name, status);
-    process_exit();
     thread_exit();
 }
 
