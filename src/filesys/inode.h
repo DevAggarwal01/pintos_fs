@@ -59,19 +59,4 @@ bool inode_is_directory(const struct inode *inode);
 // returns the current open count of inode or 0 if inode is null
 int get_open_cnt(const struct inode *inode);
 
-// monitor initialization
-void monitor_init(struct monitor *mon);
-
-// acquires shared read access on the monitor
-void monitor_read_enter(struct monitor *mon);
-
-// releases shared read access on the monitor
-void monitor_read_exit(struct monitor *mon);
-
-// acquires exclusive write access on the monitor
-void monitor_write_enter(struct monitor *mon);
-
-// releases exclusive write access on the monitor
-void monitor_write_exit(struct monitor *mon);
-
 #endif // filesys/inode_h
