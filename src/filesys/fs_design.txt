@@ -1,0 +1,379 @@
+                    +-------------------------+
+                    |           CS 439        |
+                    | PROJECT 4: FILE SYSTEMS |
+                    |      DESIGN DOCUMENT    |
+                    +-------------------------+
+
+
+The questions in this design document should reflect the design of the code you 
+wrote for the project.   Your grade will reflect both the quality of your 
+answer in this document and the quality of the design implementation in your 
+code.  You may receive partial credit for answering questions for parts of 
+the project that you did not get to implement, but you must indicate in your 
+answer that there is no corresponding implementation, or you will not receive 
+any credit.
+
+
+For each question, you should include both the name of the file(s), function 
+name(s), and the line numbers where the relevant code may be found.
+
+
+These design documents will be completed and submitted as a group.  Please use 
+this document as a guide for design and discuss the questions and their 
+potential answers prior to beginning implementation.
+
+
+When you have completed your design document, submit it to the Canvas 
+assignment Project 4 Design and Documentation.   
+
+
+***Your submission must be a text file and each line must not extend past 80 
+characters.  In addition, your submission must contain all of the original 
+material and not exceed 18,000 characters.  The character count will be 
+measured using the Linux command wc.  (Note that rtf files are NOT text files.)
+
+
+---- Team Information  ----
+
+
+>> Fill your names, UT EIDs, CS logins, email addresses, and unique numbers:
+
+Name: Dev Aggarwal
+EID: da34882
+CS Login: dev4dev
+Email: dev4dev@cs.utexas.edu
+Unique Number: 54895
+
+Name: Hrutvik Rao Palutla Venkata
+EID: hp22429
+CS Login: hrutvikp
+Email: hrutvikp@cs.utexas.edu
+Unique Number: 54905
+
+Slip days used on this project: N/A
+
+---- PRELIMINARIES ----
+
+
+>> If you have any preliminary comments on your submission or notes for the
+>> TAs, give them here.
+>> N/A
+
+
+>> Please cite any offline or online sources you consulted while
+>> preparing your submission, other than the Pintos documentation, course
+>> text, lecture notes, and course staff.
+>> N/A
+
+
+>> Please paste a link to your GitLab repo below.
+>> https://github.com/DevAggarwal01/pintos_fs
+
+
+
+                     INDEXED AND EXTENSIBLE FILES
+                     ============================
+
+
+---- DATA STRUCTURES ----
+
+
+>> A1: Copy here the declaration of each new or changed `struct' or
+>> `struct' member, global or static variable, `typedef', â€˜#defineâ€™, or
+>> enumeration that was necessary for your indexed and extensible file
+>> implementation.  Identify the purpose of each in 25 words or less.
+
+// on disk representation of an inode
+struct inode_disk {
+    uint32_t is_directory;            // 0 for file, nonzero for directory
+    off_t length;                     // file size in bytes
+    unsigned magic;                   // magic number
+    uint32_t direct[DIRECT_BLOCKS];   // direct data block sectors
+    block_sector_t indirect;          // single indirect block sector
+    block_sector_t double_indirect;   // double indirect block sector
+};
+
+PURPOSE: inode_disk holds the indices of blocks containing filesystem data.
+
+// in memory representation of an inode
+struct inode {
+    struct list_elem elem;                    // element in list of open inodes
+    block_sector_t sector;                    // sector number of on disk inode
+    int open_cnt;                             // number of openers
+    bool removed;                             // true if deleted but still open
+    int deny_write_cnt;                       // 0 allows writes, >0 denies writes
+    struct inode_disk data;                   // cached on disk inode contents
+    struct lock extending_file_lock;          // lock for synchronizing access to inode
+};
+
+PURPOSE: represents an inode and stores all associated info (including a lock for extensions)
+
+// list of all currently open inodes
+static struct list open_inodes;
+
+PURPOSE: stores all open inodes (i.e., inodes being referenced by atleast one thread)
+
+>> A2: What is the maximum size of a file supported by your inode
+>> structure?  Show your work.
+
+The maximum number of data sectors that a single inode can reference is defined by MAX_ENTRIES (inode.c, line 18):
+#define MAX_ENTRIES (DIRECT_BLOCKS + INDIRECT_BLOCK_ENTRIES + INDIRECT_BLOCK_ENTRIES * INDIRECT_BLOCK_ENTRIES)
+
+Here are the important constants of this problem:
+BLOCK_SECTOR_SIZE: 512 bytes
+DIRECT_BLOCKS = 123 [specified as a constant (inode.c, line 16)]
+INDIRECT_BLOCK_ENTRIES = 512 / 4 = 128 [since sizeof(block_sector_t) is 4 bytes]
+FIRST_LEVEL_INDIRECT_BLOCKS = 1
+SECOND_LEVEL_INDIRECT_BLOCKS = 1
+
+Total data blocks per inode (from MAX_ENTRIES formula): 123 + 1 * 128 + 1 * 128 * 128 = 16,635 data sectors
+Total data held: MAX_ENTRIES * BLOCK_SECTOR_SIZE = 16,635 * 512B = 8,517,120B = 8.1 MiB
+
+
+---- SYNCHRONIZATION ----
+
+
+>> A3: Explain how your code avoids a race if two processes attempt to
+>> extend a file at the same time.
+
+To prevent races during file growth, we use a per-inode lock named extending_file_lock, 
+defined inside struct inode. Whenever a write operation may extend the file, inode_write_at() 
+checks whether offset + size passes beyond the current file length. If this is true, and if 
+the write overlaps the region at or near end-of-file, it acquires extending_file_lock before 
+performing any operation. The extension itself occurs inside extend_capacity() which allocates 
+additional sectors, creates indirect or double-indirect blocks if needed, writes zero-initialized 
+buffers to new sectors, updates the on-disk inode’s length, and writes using block_write(). 
+Because only one writer can hold the extension lock at a time, concurrent threads attempting to 
+grow the file can never extend at the same time. Two simultaneous writes never interleave while
+modifying inode metadata, indirect block structures, or the file length field. As a result, race 
+conditions such as both writers allocating the same sector or corrupting index blocks are avoided.
+
+
+>> A4: Suppose processes A and B both have file F open, both
+>> positioned at end-of-file.  If A reads and B writes F at the same
+>> time, A may read all, part, or none of what B writes.  However, A
+>> may not read data other than what B writes, e.g. if B writes
+>> nonzero data, A is not allowed to see all zeros.  Explain how your
+>> code avoids this race.
+
+Our design ensures that, if process A is reading near end-of-file while process B writes and extends 
+the file, A may observe none, some, or all of the new bytes, but will never read garbage. In inode_read_at(), 
+if a read spans a region that touches end-of-file, it also acquires extending_file_lock, the same lock used 
+by extending writers. This means that whenever process A could enter newly allocated space, it waits until any 
+concurrent writer (like B) finishes its operation. On the other hand, if process A obtains the lock first, 
+process B blocks until the read finishes. The worst case is that process A finishes before or after the extension, 
+meaning it either sees only original file content or a mixture containing real new bytes. However, it never
+sees stale content, and so races are avoided here.
+
+
+>> A5: Explain how your synchronization design provides "fairness".
+>> File access is "fair" if readers cannot indefinitely block writers
+>> or vice versa.  That is, one or many processes reading from a file
+>> cannot forever prevent another process from writing to the file, and
+>> one or many processes writing to a file cannot forever prevent
+>> another process from reading the file.
+
+We achieve fairness by controlling only file growth and end-of-file access, and by allowing most 
+reads and non-extending writes to proceed lock-free. Because both inode_read_at() (when touching EOF) 
+and extending writes acquire the same lock, they form a single FIFO wait queue internally; there's no
+priority, so there's no waiting. We grant no special privileges to readers or writers, and our critical
+sections are short, since only metadata updates, indirect block allocation, and write operations to newly 
+allocated blocks occur with a lock. A writer cannot starve due to continuous readers, and vice versa. 
+
+
+---- RATIONALE ----
+
+
+>> A6: Is your file layout a multilevel indexed structure?  If so, why
+>> did you choose this particular combination of direct, indirect, and
+>> doubly indirect blocks?  If not, why did you choose an alternative
+>> file structure, and what advantages and disadvantages does your
+>> structure have, compared to a multilevel index?
+>> In your explanation, include at least two reasons to support your 
+>> choices.
+
+Our inode layout uses a multilevel indexed striction consisting of direct block pointers, one indirect 
+block, and one double-indirect block. We chose this structure because direct blocks provide fast access 
+for small files, which are common, meaning most reads and writes require no additional index traversal. T
+he single indirect block extends file capacity modestly without drastically increasing inode size, while 
+the double-indirect block enables the project to support larger files. Some benefits of our choices are:
+
+1. random access remains straightforward, since locating a block involves at most two index reads
+2. growing a file occurs only when needed, since sectors are allocated on demand, and indirect blocks are
+created only when necessary
+
+Some alternatives are purely direct allocation, which restricts maximum file size, and fully indirect structures,
+which hurt performance and are complicated. Our approach is a hybrid.
+
+
+
+                            SUBDIRECTORIES
+                            ==============
+
+
+---- DATA STRUCTURES ----
+
+
+>> B1: Copy here the declaration of each new or changed `struct' or
+>> `struct' member, global or static variable, `typedef', â€˜#defineâ€™, or
+>> enumeration that was necessary for your subdirectory 
+>> implementation.  Identify the purpose of each in 25 words or less.
+
+/* A directory. */
+struct dir {
+  struct inode *inode; /* Backing store. */
+  off_t pos;           /* Current position. */
+};
+
+PURPOSE: wraps an inode representing a directory and maintains an iteration pointer pos for readdir.
+
+/* A single directory entry. */
+struct dir_entry {
+  block_sector_t inode_sector; /* Sector number of header. */
+  char name[NAME_MAX + 1];     /* Null terminated file name. */
+  bool in_use;                 /* In use or free? */
+};
+
+PURPOSE: Records the sector of the child’s inode, name, and a flag indicating if this slot is active.
+
+// thread structure
+struct thread {
+    /* Owned by thread.c. */
+    tid_t tid;                 /* Thread identifier. */
+    enum thread_status status; /* Thread state. */
+    char name[16];             /* Name (for debugging purposes). */
+    uint8_t *stack;            /* Saved stack pointer. */
+    int priority;              /* Priority. */
+    int original_priority;     /* Original priority before any donations. */
+    struct list_elem allelem;  /* List element for all threads list. */
+
+    /* Shared between thread.c and synch.c. */
+    struct list_elem elem;     /* List element. */
+    struct lock* waiting;      /* Lock that thread is waiting on. */
+    struct list locks;         /* List of locks held by thread. */
+
+    // for user programs
+    int exit_code;                          // exit code of the thread
+    struct child_record *child_record;      // record of this thread in parent's child list
+    struct list children;                   // list for this thread's children
+    struct thread *parent;                  // pointer to parent thread
+
+    struct list fds;                        // list of file descriptor entries
+    int next_fd;                            // next available file descriptor number
+    struct file *exec_file;                 // deny writes to executable files
+
+    // for filesys
+    struct dir *current_dir;                // current directory of the thread
+
+#ifdef USERPROG
+  /* Owned by userprog/process.c. */
+  uint32_t *pagedir; /* Page directory. */
+#endif
+
+    /* Owned by thread.c. */
+    unsigned magic; /* Detects stack overflow. */
+};
+
+PURPOSE: stores all thread info; for this project in particular, so stores the thread's current directory
+
+
+---- ALGORITHMS ----
+
+
+>> B2: Describe your code for traversing a user-specified path.  How
+>> do traversals of absolute and relative paths differ?
+
+We do path traversal occurs by tokenizing a pathname by '/', looking up each component inside 
+the current directory, opening its inode as another struct dir, and continuing until the final 
+component is reached. If a path begins with '/', traversal begins at the root directory’s inode; 
+otherwise, it begins at the thread’s current_dir. We make sure that components in the middle are
+directories, and we use dir_lookup(); the failure of any lookup terminates the method. The final 
+token is returned to the caller as the "leaf" component, and its parent directory is returned as 
+a struct dir * so the caller may create, remove, or open the entry. 
+
+
+---- SYNCHRONIZATION ----
+
+
+>> B3: How do you prevent races on directory entries?  For example,
+>> only one of two simultaneous attempts to remove a single file
+>> should succeed, as should only one of two simultaneous attempts to
+>> create a file with the same name, and so on.
+
+For directories, creation and removal both start with a lookup scan of directory entries using inode_read_at() 
+to determine whether a name already exists. If found during creation, the operation fails; if not found, the 
+first unused slot or end-of-directory offset becomes the insertion point. During removal, lookup locates a 
+matching entry, marks it unused, and writes it back using inode_write_at(). Directory growth is protected by the 
+same extending_file_lock used for file extension. Our locking around growth combined with our logic of looking
+up names ensures that only one operation logically succeeds. If two threads race to create the same name, both 
+may pass the lookup, but only one will successfully write the final entry due to inode-level sequential logic for 
+growth; the second sees the entry after commit and returns false. Likewise, if two removals occur simultaneously,
+only the first update changes the directory state; the second re-reads and finds the entry absent.
+
+
+>> B4: Does your implementation allow a directory to be removed if it
+>> is open by a process or if it is in use as a process's current
+>> working directory?  If so, what happens to that process's future
+>> file system operations?  If thatâ€™s not allowed, how do you
+>> prevent it?
+
+A directory cannot be removed if any process still holds it open or uses it as a current working directory. 
+Before deletion, filesys_remove() obtains the target inode from its parent, checks whether inode_is_directory(inode)
+is true, and if so checks the open count along with a helper to determine whether any thread’s current_dir references
+it. If either condition holds, removal is not carried out to prevent eferences persisting after the directory is 
+unlinked. If permitted, the directory is opened and scanned to verify that only "." and ".." remain (i.e., to check
+if it's empty). Only then is its directory entry cleared and inode_remove() run. No process continues using a deleted 
+directory; instead removal is delayed until the final reference to the directory closes.
+
+
+---- RATIONALE ----
+
+
+>> B5: What type of variable/structure did you use to represent the 
+>> current directory of a process?   Why did you choose this 
+>> representation?  Give at least two reasons.
+
+Each thread stores a pointer to its current directory (struct dir *current_dir), so relative path operations
+begin traversal from its active directory. We chose this representation because it worked weel with our existing 
+inode open/close system and simplifies a lot of implementation details. Some reasons for our choice were:
+
+1. changing directories simply closes the old dir * and assigns a new one
+2. path traversal is efficient since the kernel never rewalks parent pointers to determine working directory state
+
+
+
+                           SURVEY QUESTIONS
+                           ================
+
+
+Answering these questions is optional, but it will help us improve the
+course in future quarters.  Feel free to tell us anything you
+want--these questions are just to spur your thoughts.  You may also
+choose to respond anonymously in the course evaluations at the end of
+the semester.
+
+
+>> In your opinion, was this assignment, or any one of the three problems
+>> in it, too easy or too hard?  Did it take too long or too little time?
+
+Harder than every other project but virtual memory.
+
+>> Did you find that working on a particular part of the assignment gave
+>> you greater insight into some aspect of OS design?
+
+File systems are cool (somewhat, when they're not being annoying to debug).
+
+>> Is there some particular fact or hint we should give students in
+>> future quarters to help them solve the problems?  Conversely, did you
+>> find any of our guidance to be misleading?
+
+Not really; this assignment's specification had everything we needed.
+
+>> Do you have any suggestions for the TAs to more effectively assist
+>> students in future quarters?
+
+Didn't really go to office hours for this project, but all the TAs have been great!
+
+>> Any other comments?
+
+It's been a fun ride. Bye-bye, OS projects!

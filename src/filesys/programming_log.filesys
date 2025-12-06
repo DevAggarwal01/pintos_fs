@@ -2,6 +2,18 @@ Teammates: Dev Aggarwal, Hrutvik Rao Palutla Venkata
 
 I (Hrutvik) will give a general overview of our work on this assignment.
 
-
+Me and Dev did not start working on this project till after Thanksgiving. Dev and I planned out our 
+approach to this problem on the Friday after Thanksgiving, and both me and him worked on the project
+over the weekend, implementing indexed and extensible files, and subdirectories; Dev wrote a lot of
+code, but we did spend a couple hours pair programming when we met up over break and also on the bus
+to Austin. We started synchronization by removing the global file lock on Thursday, a day before the
+project was due; Dev implemented the initial removal. After that, I personally spent a lot of fixing
+failing regular test cases, and also a lot of time on Friday fixing jitter issues (initially, we had
+a lot of panics and our score was only a 10.3). Dev hoped in to help late evening, and we managed to 
+fix a core issue that boosted our score from 0.5-ish to around 0.95; I finally implemented a few fixes
+to userprog code that we had not fixed when we did that project to bring our score to a 1.0 with jitter,
+and then spent a couple of hours cleaning up some very very messy code (a result of debugging, really).
+Me and Dev collaborated on a Google doc to finish the design doc and this programming log, and I 
+submitted our last operating systems project Friday night (it's really been a great ride).
 
 Total Hours Spent: ~14–15 hours each
