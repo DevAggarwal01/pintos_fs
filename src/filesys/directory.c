@@ -7,15 +7,13 @@
 #include "threads/malloc.h"
 
 /* A directory. */
-struct dir
-{
+struct dir {
   struct inode *inode; /* Backing store. */
   off_t pos;           /* Current position. */
 };
 
 /* A single directory entry. */
-struct dir_entry
-{
+struct dir_entry {
   block_sector_t inode_sector; /* Sector number of header. */
   char name[NAME_MAX + 1];     /* Null terminated file name. */
   bool in_use;                 /* In use or free? */
@@ -23,32 +21,29 @@ struct dir_entry
 
 /* Creates a directory with space for ENTRY_CNT entries in the
    given SECTOR.  Returns true if successful, false on failure. */
-bool dir_create (block_sector_t sector, size_t entry_cnt, block_sector_t parent_sector)
-{
-  // create the inode that contains the data for the directory
-  if(!inode_create (sector, entry_cnt * sizeof (struct dir_entry), true)) {
-    return false;
-  }
-
-  struct inode *inode = inode_open(sector);
-  if(inode == NULL) {
-    return false; 
-  }
-
-  struct dir *dir = dir_open(inode);
-  if(dir == NULL) {
-    return false;
-  }
-
-  // each directory contains a "." file pointing to itself and a ".." file pointing to its parent directory
-  if(!dir_add(dir, ".", sector) || !dir_add(dir, "..", parent_sector)) {
+bool dir_create (block_sector_t sector, size_t entry_cnt, block_sector_t parent_sector) {
+    // create the inode that contains the data for the directory
+    if (!inode_create (sector, entry_cnt * sizeof (struct dir_entry), true)) {
+        return false;
+    }
+    // open the inode as a directory
+    struct inode *inode = inode_open(sector);
+    if (inode == NULL) {
+        return false; 
+    }
+    struct dir *dir = dir_open(inode);
+    if(dir == NULL) {
+        return false;
+    }
+    // each directory contains a "." file pointing to itself and a ".." file pointing to its parent directory
+    if (!dir_add(dir, ".", sector) || !dir_add(dir, "..", parent_sector)) {
+        dir_close(dir);
+        return false;
+    }
+    // free from memory (changes have been made on disk to inodes)
     dir_close(dir);
-    return false;
-  }
-  // free from RAM (changes have been made on disk to inodes)
-  dir_close(dir);
 
-  return true;
+    return true;
 }
 
 /* Opens and returns the directory for the given INODE, of which
@@ -95,7 +90,9 @@ void dir_close (struct dir *dir)
 }
 
 /* Returns the inode encapsulated by DIR. */
-struct inode *dir_get_inode (struct dir *dir) { return dir->inode; }
+struct inode *dir_get_inode (struct dir *dir) { 
+    return dir->inode; 
+}
 
 /* Searches DIR for a file with the given NAME.
    If successful, returns true, sets *EP to the directory entry
@@ -103,8 +100,7 @@ struct inode *dir_get_inode (struct dir *dir) { return dir->inode; }
    directory entry if OFSP is non-null.
    otherwise, returns false and ignores EP and OFSP. */
 static bool lookup (const struct dir *dir, const char *name,
-                    struct dir_entry *ep, off_t *ofsp)
-{
+                    struct dir_entry *ep, off_t *ofsp) {
   struct dir_entry e;
   size_t ofs;
 
@@ -128,8 +124,7 @@ static bool lookup (const struct dir *dir, const char *name,
    and returns true if one exists, false otherwise.
    On success, sets *INODE to an inode for the file, otherwise to
    a null pointer.  The caller must close *INODE. */
-bool dir_lookup (const struct dir *dir, const char *name, struct inode **inode)
-{
+bool dir_lookup (const struct dir *dir, const char *name, struct inode **inode) {
   struct dir_entry e;
 
   ASSERT (dir != NULL);
@@ -144,13 +139,10 @@ bool dir_lookup (const struct dir *dir, const char *name, struct inode **inode)
 }
 
 /* Adds a file named NAME to DIR, which must not already contain a
-   file by that name.  The file's inode is in sector
-   INODE_SECTOR.
-   Returns true if successful, false on failure.
-   Fails if NAME is invalid (i.e. too long) or a disk or memory
-   error occurs. */
-bool dir_add (struct dir *dir, const char *name, block_sector_t inode_sector)
-{
+   file by that name.  The file's inode is in sector INODE_SECTOR.
+   Returns true if successful, false on failure. Fails if NAME is invalid 
+   (i.e. too long) or a disk or memory error occurs. */
+bool dir_add (struct dir *dir, const char *name, block_sector_t inode_sector) {
   struct dir_entry e;
   off_t ofs;
   bool success = false;
@@ -191,8 +183,7 @@ done:
 /* Removes any entry for NAME in DIR.
    Returns true if successful, false on failure,
    which occurs only if there is no file with the given NAME. */
-bool dir_remove (struct dir *dir, const char *name)
-{
+bool dir_remove (struct dir *dir, const char *name) {
   struct dir_entry e;
   struct inode *inode = NULL;
   bool success = false;
@@ -225,12 +216,10 @@ done:
 }
 
 /* Reads the next directory entry in DIR and stores the name in
-   NAME.  Returns true if successful, false if the directory
+   NAME. Returns true if successful, false if the directory
    contains no more entries. */
-bool dir_readdir (struct dir *dir, char name[NAME_MAX + 1])
-{
+bool dir_readdir (struct dir *dir, char name[NAME_MAX + 1]) {
   struct dir_entry e;
-
   while (inode_read_at (dir->inode, &e, sizeof e, dir->pos) == sizeof e)
     {
       dir->pos += sizeof e;

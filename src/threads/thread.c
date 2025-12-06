@@ -622,20 +622,25 @@ static tid_t allocate_tid (void)
   return tid;
 }
 
-// HELPER: checks if the given inode is any process's working directory
+/* Returns true if INODE is the current working directory of any process. 
+   Checks this by iterating through all processes and comparing their current directory inodes. */
 bool inode_is_working_directory (struct inode *inode) {
-  struct list_elem * process_elem;
-  for (process_elem = list_begin (&all_list); process_elem != list_end (&all_list); process_elem = list_next (process_elem)) {
-    struct thread *t = list_entry (process_elem, struct thread, allelem);
-    if(t->current_dir != NULL) {
-      block_sector_t current_dir_sector = inode_get_inumber(dir_get_inode(t->current_dir));
-      block_sector_t inode_sector = inode_get_inumber(inode);
-      if (current_dir_sector == inode_sector) {
-        return true;
-      }
+    struct list_elem * process_elem;
+    // iterate through all threads/processes
+    for (process_elem = list_begin (&all_list); process_elem != list_end (&all_list); process_elem = list_next (process_elem)) {
+        // get the thread structure
+        struct thread *t = list_entry (process_elem, struct thread, allelem);
+        // check if the current directory matches the given inode
+        if (t->current_dir != NULL) {
+            block_sector_t current_dir_sector = inode_get_inumber(dir_get_inode(t->current_dir));
+            block_sector_t inode_sector = inode_get_inumber(inode);
+            if (current_dir_sector == inode_sector) {
+                return true;
+            }
+        }
     }
-  }
-  return false;
+    // if no matches found, return false
+    return false;
 }
 
 /* Offset of `stack' member within `struct thread'.
